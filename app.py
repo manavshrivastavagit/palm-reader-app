@@ -802,10 +802,16 @@ def analyze_palm_stream(client: genai.Client, image: Image.Image, category: str,
     logger.info(f"Starting palm analysis (category={category}, tradition={tradition}, lang={lang})")
     prompt = build_reading_prompt(category, tradition, lang)
 
+    # Upload image to GenAI File API for reliable model access
+    _buf = io.BytesIO()
+    image.save(_buf, format="PNG")
+    _buf.seek(0)
+    uploaded_file = client.files.upload(file=_buf)
+
     try:
         response_stream = client.models.generate_content_stream(
             model="gemini-2.5-flash",
-            contents=[prompt, image],
+            contents=[prompt, uploaded_file],
             config=genai.types.GenerateContentConfig(
                 system_instruction=get_system_prompt(lang),
                 temperature=0.8,
@@ -815,6 +821,8 @@ def analyze_palm_stream(client: genai.Client, image: Image.Image, category: str,
         for chunk in response_stream:
             if chunk.text:
                 yield chunk.text
+        # Clean up uploaded file after streaming completes
+        client.files.delete(name=uploaded_file.name)
     except Exception as e:
         logger.error(f"Error during palm analysis: {str(e)}", exc_info=True)
         if lang == "hi":
@@ -827,8 +835,14 @@ def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str,
     """Handle follow-up questions about the reading using streaming and native chat history format."""
     logger.info(f"Starting chat follow-up (history_len={len(history)}, lang={lang})")
 
+    # Upload image to GenAI File API for reliable model access
+    _buf = io.BytesIO()
+    image.save(_buf, format="PNG")
+    _buf.seek(0)
+    _uploaded = client.files.upload(file=_buf)
+
     # 1. Initial reading context: flat list — SDK auto-wraps text+image in Content(role="user")
-    contents = [f"Initial Palm Reading Context:\n\n{reading}", image]
+    contents = [f"Initial Palm Reading Context:\n\n{reading}", _uploaded]
 
     # 2. Add validation acknowledgement by the model to lock the turn
     contents.append(genai.types.Content(
@@ -867,12 +881,18 @@ def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str,
         for chunk in response_stream:
             if chunk.text:
                 yield chunk.text
+        # Clean up after streaming completes
+        client.files.delete(name=_uploaded.name)
     except Exception as e:
         logger.error(f"Error during chat follow-up: {str(e)}", exc_info=True)
         if lang == "hi":
             yield f"\n\n❌ **त्रुटि**: प्रतिक्रिया उत्पन्न करने में विफल। ({str(e)})"
         else:
             yield f"\n\n❌ **Error**: Failed to generate response. ({str(e)})"
+        try:
+            client.files.delete(name=_uploaded.name)
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────────
@@ -1078,14 +1098,20 @@ def detect_palm_lines(client: genai.Client, image: Image.Image, t: dict) -> dict
     )
 
     try:
+        _buf = io.BytesIO()
+        image.save(_buf, format="PNG")
+        _buf.seek(0)
+        uploaded_file = client.files.upload(file=_buf)
+
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=[prompt, image],
+            contents=[prompt, uploaded_file],
             config=genai.types.GenerateContentConfig(
                 temperature=0.2,
                 max_output_tokens=1024,
             ),
         )
+        client.files.delete(name=uploaded_file.name)
         text = response.text.strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
