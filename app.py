@@ -2078,6 +2078,29 @@ def render_live_scanner(t):
       border: 1px solid rgba(248,113,113,0.35);
       color: #f87171;
     }
+    #capture-box {
+      width: 100%;
+      max-width: 680px;
+      margin-top: 14px;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      border-radius: 12px;
+      border: 1px solid rgba(167,139,250,0.3);
+      padding: 10px;
+      background: rgba(10,10,26,0.7);
+    }
+    #capture-box img {
+      width: 100%;
+      border-radius: 8px;
+    }
+    #capture-box .label {
+      color: #b0a8d6;
+      font-size: 0.75rem;
+      margin-bottom: 6px;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
   </style>
 </head>
 <body>
@@ -2087,6 +2110,10 @@ def render_live_scanner(t):
   </div>
   <p id="status">⏳ Loading MediaPipe Hand Landmarker...</p>
   <div id="badge"></div>
+  <div id="capture-box">
+    <div class="label">📸 Captured</div>
+    <img id="captured-img" alt="Captured palm" />
+  </div>
 
   <!-- MediaPipe JS CDN -->
   <script type="module">
@@ -2215,10 +2242,47 @@ def render_live_scanner(t):
     status.textContent = '✅ Camera ready — raise your palm!';
     badge.style.display = 'block';
 
-    // ── Detection loop ───────────────────────────────────────────────────
+    // ── Detection loop with auto-capture ─────────────────────────────────
     let lastTs = -1;
     let noHandFrames = 0;
     const NO_HAND_THRESHOLD = 8;
+    let stableHandFrames = 0;
+    const STABLE_CAPTURE_FRAMES = 20;
+    let cooldown = false;
+    const capBox = document.getElementById('capture-box');
+    const capImg = document.getElementById('captured-img');
+
+    function captureFrame() {
+      const cap = document.createElement('canvas');
+      cap.width  = video.videoWidth  || 640;
+      cap.height = video.videoHeight || 480;
+      const capCtx = cap.getContext('2d');
+      capCtx.drawImage(video, 0, 0);
+      const dataUrl = cap.toDataURL('image/jpeg', 0.85);
+      capImg.src = dataUrl;
+      capBox.style.display = 'flex';
+      cooldown = true;
+      setTimeout(() => { cooldown = false; }, 3000);
+      status.textContent = '📸 Palm captured! Hold steady...';
+      // Send back to Streamlit
+      parent.postMessage({type: 'streamlit:setComponentValue', value: dataUrl}, '*');
+    }
+
+    function isPalmOpen(lms) {
+      // Check finger extension — tip y must be above pip y (y increases downward)
+      let extended = 0;
+      // index: tip=8, pip=6
+      if (lms[8].y < lms[6].y) extended++;
+      // middle: tip=12, pip=10
+      if (lms[12].y < lms[10].y) extended++;
+      // ring: tip=16, pip=14
+      if (lms[16].y < lms[14].y) extended++;
+      // pinky: tip=20, pip=18
+      if (lms[20].y < lms[18].y) extended++;
+      // thumb: tip=4, ip=3
+      if (lms[4].y < lms[3].y) extended++;
+      return extended >= 3;
+    }
 
     function detect() {
       if (video.readyState < 2) { requestAnimationFrame(detect); return; }
@@ -2240,8 +2304,14 @@ def render_live_scanner(t):
           ? '✋ 2 Hands Detected'
           : '✋ Hand Detected';
         badge.className = 'badge-detected';
+
+        stableHandFrames++;
+        if (stableHandFrames >= STABLE_CAPTURE_FRAMES && !cooldown && result.landmarks.length === 1 && isPalmOpen(result.landmarks[0])) {
+          captureFrame();
+        }
       } else {
         noHandFrames++;
+        stableHandFrames = 0;
         if (noHandFrames > NO_HAND_THRESHOLD) {
           badge.textContent = '🤚 No Hand Detected';
           badge.className = 'badge-none';
@@ -2256,7 +2326,31 @@ def render_live_scanner(t):
 """
 
     import streamlit.components.v1 as components
-    components.html(html_code, height=580, scrolling=False)
+    from PIL import Image as PILImage
+    import base64
+
+    result = components.html(html_code, height=580, scrolling=False)
+    if result:
+        try:
+            # result is a data URL like "data:image/jpeg;base64,..."
+            _, b64 = result.split(",", 1)
+            img_bytes = base64.b64decode(b64)
+            captured = PILImage.open(io.BytesIO(img_bytes))
+            captured.load()
+            if captured.mode != "RGB":
+                captured = captured.convert("RGB")
+            st.session_state["_live_capture"] = captured
+        except Exception as e:
+            logger.warning("Failed to decode live capture: %s", e)
+
+    if st.session_state.get("_live_capture"):
+        st.markdown("---")
+        col_a, col_b, col_c = st.columns([1, 2, 1])
+        with col_b:
+            _cap = st.session_state["_live_capture"]
+            _buf = io.BytesIO()
+            _cap.save(_buf, format="PNG")
+            st.image(_buf.getvalue(), caption=t["your_palm"], width="stretch")
 
 
 # ─────────────────────────────────────────────
