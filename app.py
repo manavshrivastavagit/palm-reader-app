@@ -967,42 +967,70 @@ def _center_crop_fallback(image: Image.Image) -> Image.Image:
 
 
 def _detect_hand_bbox(img_array):
-    """Detect hand bounding box — tries YCrCb skin detection first
+    """Detect hand bounding box — tries YCrCb + flood-fill from image center
     (zero native deps), then MediaPipe if available.
     Returns (x1,y1,x2,y2) pixel coords or None."""
     h, w = img_array.shape[:2]
 
-    # ── Approach 1: YCrCb skin colour segmentation ──────────────────
+    # ── Approach 1: YCrCb skin colour segmentation + flood-fill ──────
     # Works on every platform, no native libraries, no model downloads.
+    # Flood-fill from center ensures we only keep the palm region,
+    # ignoring skin-coloured background pixels.
     try:
         import numpy as np
         R = img_array[:, :, 0].astype(np.float32)
         G = img_array[:, :, 1].astype(np.float32)
         B = img_array[:, :, 2].astype(np.float32)
 
-        # RGB → YCrCb  (ITU-R BT.601, the standard for skin detection)
         Y  = 0.299 * R + 0.587 * G + 0.114 * B
         Cr = (R - Y) * 0.713 + 128
         Cb = (B - Y) * 0.564 + 128
 
-        # Classic skin range in YCrCb — widened for camera/webcam lighting
-        skin = (Cr >= 125) & (Cr <= 180) & (Cb >= 70) & (Cb <= 135)
+        # Classic skin range — tight but effective
+        skin = (Cr >= 133) & (Cr <= 173) & (Cb >= 77) & (Cb <= 127)
 
-        ys, xs = np.where(skin)
-        if len(ys) >= 200:  # enough skin pixels → hand found
+        # Flood-fill from centre to find contiguous skin region
+        skin_u8 = np.asarray(skin, dtype=np.uint8)
+        cy, cx = h // 2, w // 2
+
+        if not skin_u8[cy, cx]:
+            # If centre isn't skin, find nearest skin pixel
+            ys, xs = np.where(skin_u8)
+            if len(ys) < 200:
+                return None
+            # Pick the skin pixel closest to centre
+            dists = (xs - cx) ** 2 + (ys - cy) ** 2
+            nearest = np.argmin(dists)
+            cy, cx = int(ys[nearest]), int(xs[nearest])
+
+        # BFS flood-fill
+        visited = np.zeros_like(skin_u8, dtype=bool)
+        stack = [(cy, cx)]
+        visited[cy, cx] = True
+        fill_ys, fill_xs = [cy], [cx]
+        while stack:
+            y, x = stack.pop()
+            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and skin_u8[ny, nx]:
+                    visited[ny, nx] = True
+                    stack.append((ny, nx))
+                    fill_ys.append(ny)
+                    fill_xs.append(nx)
+
+        if len(fill_ys) >= 200:
             pad = int(min(w, h) * 0.06)
-            x1 = max(0, int(xs.min()) - pad)
-            y1 = max(0, int(ys.min()) - pad)
-            x2 = min(w, int(xs.max()) + pad)
-            y2 = min(h, int(ys.max()) + pad)
-            # If box is very tall (arm included), take the top palm portion
+            x1 = max(0, min(fill_xs) - pad)
+            y1 = max(0, min(fill_ys) - pad)
+            x2 = min(w, max(fill_xs) + pad)
+            y2 = min(h, max(fill_ys) + pad)
             box_h, box_w = y2 - y1, x2 - x1
             if box_h > box_w * 1.6:
                 y2 = y1 + int(box_w * 1.4)
-            logger.info("Hand detected via YCrCb skin (%d×%d)", x2 - x1, y2 - y1)
+            logger.info("Hand detected via YCrCb + flood-fill (%d×%d)", x2 - x1, y2 - y1)
             return (x1, y1, x2, y2)
     except Exception as e:
-        logger.debug("YCrCb skin detection failed: %s", e)
+        logger.debug("YCrCb + flood-fill failed: %s", e)
 
     # ── Approach 2: MediaPipe landmark detection ─────────────────────
     try:
@@ -1073,8 +1101,10 @@ def _detect_hand_bbox(img_array):
 
 def crop_hand_image(image: Image.Image) -> Image.Image:
     """Detect hand using CV preprocessing, crop tightly, and composite
-    onto dark background.  Falls back to center-crop."""
+    onto dark background.  Falls back to center-crop.
+    Saves debug overlay with bbox to session_state for display."""
     import numpy as np
+    from PIL import ImageDraw
 
     if image.mode != "RGB":
         img = image.convert("RGB")
@@ -1091,6 +1121,12 @@ def crop_hand_image(image: Image.Image) -> Image.Image:
 
     x1, y1, x2, y2 = bbox
 
+    # ── Save debug overlay with bbox ───────────────────────────────────
+    _dbg = img.copy()
+    _draw = ImageDraw.Draw(_dbg)
+    _draw.rectangle([x1, y1, x2, y2], outline=(0, 255, 0), width=3)
+    st.session_state["_debug_bbox_img"] = _dbg
+
     # ── Create rough mask for background removal ─────────────────────
     # Use skin-colour mask within the bounding box
     R = img_array[:, :, 0].astype(np.float32)
@@ -1099,7 +1135,7 @@ def crop_hand_image(image: Image.Image) -> Image.Image:
     Y  = 0.299 * R + 0.587 * G + 0.114 * B
     Cr = (R - Y) * 0.713 + 128
     Cb = (B - Y) * 0.564 + 128
-    skin = (Cr >= 125) & (Cr <= 180) & (Cb >= 70) & (Cb <= 135)
+    skin = (Cr >= 133) & (Cr <= 173) & (Cb >= 77) & (Cb <= 127)
 
     mask = Image.new("L", (w, h), 0)
     mask_np = np.array(mask, dtype=np.uint8)
@@ -1425,16 +1461,22 @@ def render_upload_section(t):
 
 
 def render_palm_display(image: Image.Image, t):
-    """Display the uploaded palm image."""
+    """Display the uploaded palm image with optional bbox debug overlay."""
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown('<div class="palm-image-container">', unsafe_allow_html=True)
-        # Convert to bytes before passing to st.image() to avoid
-        # Streamlit PIL serialization issues with dirty metadata
         _buf = io.BytesIO()
         image.save(_buf, format="PNG")
         st.image(_buf.getvalue(), caption=t["your_palm"], width="stretch")
         st.markdown("</div>", unsafe_allow_html=True)
+
+    # Show debug bbox overlay if available
+    _debug_img = st.session_state.pop("_debug_bbox_img", None)
+    if _debug_img:
+        with col1:
+            _buf2 = io.BytesIO()
+            _debug_img.save(_buf2, format="PNG")
+            st.image(_buf2.getvalue(), caption="Bbox debug", width="stretch")
 
 
 def render_palm_scanning_animation(image: Image.Image, t, palm_lines=None):
