@@ -2089,9 +2089,15 @@ def render_live_scanner(t):
 </html>
 """
 
-    import base64 as _b64
-    _encoded = _b64.b64encode(html_code.encode("utf-8")).decode("utf-8")
-    st.iframe(f"data:text/html;base64,{_encoded}", height=580)
+    import html as _html
+    _escaped = _html.escape(html_code)
+    st.markdown(
+        f'<iframe srcdoc="{_escaped}" width="100%" height="580" '
+        f'allow="camera *; microphone *" '
+        f'sandbox="allow-scripts allow-same-origin allow-user-media">'
+        f'</iframe>',
+        unsafe_allow_html=True,
+    )
 
 
 # ─────────────────────────────────────────────
