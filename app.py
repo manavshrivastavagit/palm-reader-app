@@ -802,27 +802,10 @@ def analyze_palm_stream(client: genai.Client, image: Image.Image, category: str,
     logger.info(f"Starting palm analysis (category={category}, tradition={tradition}, lang={lang})")
     prompt = build_reading_prompt(category, tradition, lang)
 
-    # PIL Image must be serialised to bytes — the GenAI client does not
-    # accept PIL objects; it would silently stringify them and Gemini
-    # would refuse with "this model does not support image input".
-    img_byte_arr = io.BytesIO()
-    image.save(img_byte_arr, format="PNG")
-    image_part = genai.types.Part.from_bytes(
-        data=img_byte_arr.getvalue(), mime_type="image/png"
-    )
-
     try:
         response_stream = client.models.generate_content_stream(
             model="gemini-2.5-flash",
-            contents=[
-                genai.types.Content(
-                    role="user",
-                    parts=[
-                        genai.types.Part.from_text(text=prompt),
-                        image_part,
-                    ],
-                )
-            ],
+            contents=[prompt, image],
             config=genai.types.GenerateContentConfig(
                 system_instruction=get_system_prompt(lang),
                 temperature=0.8,
@@ -843,22 +826,10 @@ def analyze_palm_stream(client: genai.Client, image: Image.Image, category: str,
 def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str, history: list, question: str, lang: str):
     """Handle follow-up questions about the reading using streaming and native chat history format."""
     logger.info(f"Starting chat follow-up (history_len={len(history)}, lang={lang})")
-    contents = []
-    
-    # Convert PIL Image to bytes for manual Part serialization
-    img_byte_arr = io.BytesIO()
-    image.save(img_byte_arr, format="PNG")
-    image_bytes = img_byte_arr.getvalue()
-    
-    # 1. Add initial reading context as the first user turn
-    contents.append(genai.types.Content(
-        role="user",
-        parts=[
-            genai.types.Part.from_text(text=f"Initial Palm Reading Context:\n\n{reading}"),
-            genai.types.Part.from_bytes(data=image_bytes, mime_type="image/png")
-        ]
-    ))
-    
+
+    # 1. Initial reading context: flat list — SDK auto-wraps text+image in Content(role="user")
+    contents = [f"Initial Palm Reading Context:\n\n{reading}", image]
+
     # 2. Add validation acknowledgement by the model to lock the turn
     contents.append(genai.types.Content(
         role="model",
@@ -866,7 +837,7 @@ def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str,
             genai.types.Part.from_text(text="Understood. I have analyzed the palm image and will reference the reading context for your follow-up questions.")
         ]
     ))
-    
+
     # 3. Add the rest of the chat history turns, filtering out empty contents
     for msg in history[:-1]:
         if msg.get("content") and msg["content"].strip():
@@ -875,7 +846,7 @@ def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str,
                 role=role,
                 parts=[genai.types.Part.from_text(text=msg["content"].strip())]
             ))
-        
+
     # 4. Add the current user question
     if question and question.strip():
         contents.append(genai.types.Content(
@@ -926,14 +897,13 @@ def _center_crop_fallback(image: Image.Image) -> Image.Image:
 
 
 def crop_hand_image(image: Image.Image) -> Image.Image:
-    """Detect hand using MediaPipe, crop tightly, and composite onto
-    dark theme background. Falls back to center-crop or original."""
+    """Detect hand using MediaPipe (no OpenCV), crop tightly, and composite
+    onto dark background.  Falls back to center-crop or original."""
     try:
-        import cv2
-        import numpy as np
         import mediapipe as mp
+        import numpy as np
     except (ImportError, OSError) as e:
-        logger.warning("OpenCV/MediaPipe unavailable (%s) — skipping hand crop", e)
+        logger.warning("MediaPipe unavailable (%s) — skipping hand crop", e)
         return _center_crop_fallback(image)
 
     if image.mode != "RGB":
@@ -945,14 +915,12 @@ def crop_hand_image(image: Image.Image) -> Image.Image:
     if w < 64 or h < 64:
         return image
 
-    # ── Phase 1: MediaPipe hand landmark detection ────────────────────
-    hand_found = False
-    xs = ys = None
     try:
         hands = mp.solutions.hands.Hands(
             static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5,
         )
-        results = hands.process(cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR))
+        # RGB→BGR via numpy slicing — no OpenCV needed
+        results = hands.process(img_array[:, :, ::-1].copy())
         hands.close()
 
         if results.multi_hand_landmarks:
@@ -962,33 +930,35 @@ def crop_hand_image(image: Image.Image) -> Image.Image:
             ]
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
-            hand_found = True
+        else:
+            return _center_crop_fallback(image)
     except Exception as e:
         logger.warning("MediaPipe hand detection failed: %s", e)
+        return _center_crop_fallback(image)
 
-    # ── Phase 2: compute bounding box ─────────────────────────────────
-    if hand_found:
-        pad_x = int(w * 0.08)
-        pad_yt = int(h * 0.05)
-        pad_yb = int(h * 0.15)
-        x1 = max(0, min(xs) - pad_x)
-        y1 = max(0, min(ys) - pad_yt)
-        x2 = min(w, max(xs) + pad_x)
-        y2 = min(h, max(ys) + pad_yb)
+    # ── Bounding box ───────────────────────────────────────────────────
+    pad_x = int(w * 0.08)
+    pad_yt = int(h * 0.05)
+    pad_yb = int(h * 0.15)
+    x1 = max(0, min(xs) - pad_x)
+    y1 = max(0, min(ys) - pad_yt)
+    x2 = min(w, max(xs) + pad_x)
+    y2 = min(h, max(ys) + pad_yb)
 
-        hull = cv2.convexHull(np.array([(x, y) for x, y in zip(xs, ys)]))
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillPoly(mask, [hull], 255)
-        mask = cv2.GaussianBlur(mask, (15, 15), 5)
-        mask_3ch = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR).astype(np.float32) / 255.0
-        dark_bg = np.full_like(img_array, (10, 10, 26), dtype=np.uint8)
-        blended = (img_array * mask_3ch + dark_bg * (1 - mask_3ch)).astype(np.uint8)
-        cropped = blended[y1:y2, x1:x2]
-        logger.info("MediaPipe hand crop (%d×%d → %d×%d)", w, h, x2 - x1, y2 - y1)
-        return Image.fromarray(cropped)
+    # ── Mask via PIL polygon + Gaussian blur ───────────────────────────
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).polygon(pts, fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(radius=15))
 
-    # ── Phase 3: fallback center-crop (hand is usually centred in frame) ─
-    return _center_crop_fallback(image)
+    # ── Composite onto dark background ─────────────────────────────────
+    mask_np = np.array(mask, dtype=np.float32) / 255.0
+    mask_3ch = np.stack([mask_np, mask_np, mask_np], axis=-1)
+    dark_bg = np.full_like(img_array, (10, 10, 26), dtype=np.uint8)
+    blended = (img_array * mask_3ch + dark_bg * (1 - mask_3ch)).astype(np.uint8)
+    cropped = blended[y1:y2, x1:x2]
+
+    logger.info("MediaPipe hand crop (%d×%d → %d×%d)", w, h, x2 - x1, y2 - y1)
+    return Image.fromarray(cropped)
 
 
 # ─────────────────────────────────────────────
@@ -1003,9 +973,6 @@ def detect_palm_lines(client: genai.Client, image: Image.Image, t: dict) -> dict
     Returns empty dict on failure (caller falls back to defaults).
     """
     import numpy as np
-
-    img_byte_arr = io.BytesIO()
-    image.save(img_byte_arr, format="PNG")
 
     prompt = (
         "You are a palmistry expert. Analyze this palm image and detect "
@@ -1026,17 +993,7 @@ def detect_palm_lines(client: genai.Client, image: Image.Image, t: dict) -> dict
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=[
-                genai.types.Content(
-                    role="user",
-                    parts=[
-                        genai.types.Part.from_text(text=prompt),
-                        genai.types.Part.from_bytes(
-                            data=img_byte_arr.getvalue(), mime_type="image/png"
-                        ),
-                    ],
-                )
-            ],
+            contents=[prompt, image],
             config=genai.types.GenerateContentConfig(
                 temperature=0.2,
                 max_output_tokens=1024,
