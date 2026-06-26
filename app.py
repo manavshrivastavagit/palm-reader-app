@@ -6,7 +6,7 @@ Streamlit app that uses Gemini's multimodal vision to analyze palm images.
 import streamlit as st
 from typing import Optional
 from google import genai
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 import io
 import os
 import json
@@ -896,63 +896,105 @@ def _center_crop_fallback(image: Image.Image) -> Image.Image:
     return Image.blend(fallback, bg, 0.15)
 
 
-def _detect_hand_landmarks(img_array):
-    """Try multiple MediaPipe APIs to detect hand landmarks.
-    Returns list of (x,y) pixel tuples or None."""
+def _detect_hand_bbox(img_array):
+    """Detect hand bounding box — tries YCrCb skin detection first
+    (zero native deps), then MediaPipe if available.
+    Returns (x1,y1,x2,y2) pixel coords or None."""
     h, w = img_array.shape[:2]
-    import os as _os
 
-    # ── Approach 1: mp.solutions (mediapipe < 0.10.10) ────────────
+    # ── Approach 1: YCrCb skin colour segmentation ──────────────────
+    # Works on every platform, no native libraries, no model downloads.
+    try:
+        import numpy as np
+        R = img_array[:, :, 0].astype(np.float32)
+        G = img_array[:, :, 1].astype(np.float32)
+        B = img_array[:, :, 2].astype(np.float32)
+
+        # RGB → YCrCb  (ITU-R BT.601, the standard for skin detection)
+        Y  = 0.299 * R + 0.587 * G + 0.114 * B
+        Cr = (R - Y) * 0.713 + 128
+        Cb = (B - Y) * 0.564 + 128
+
+        # Classic skin range in YCrCb
+        skin = (Cr >= 133) & (Cr <= 173) & (Cb >= 77) & (Cb <= 127)
+
+        ys, xs = np.where(skin)
+        if len(ys) >= 200:  # enough skin pixels → hand found
+            pad = int(min(w, h) * 0.06)
+            x1 = max(0, int(xs.min()) - pad)
+            y1 = max(0, int(ys.min()) - pad)
+            x2 = min(w, int(xs.max()) + pad)
+            y2 = min(h, int(ys.max()) + pad)
+            # If box is very tall (arm included), take the top palm portion
+            box_h, box_w = y2 - y1, x2 - x1
+            if box_h > box_w * 1.6:
+                y2 = y1 + int(box_w * 1.4)
+            logger.info("Hand detected via YCrCb skin (%d×%d)", x2 - x1, y2 - y1)
+            return (x1, y1, x2, y2)
+    except Exception as e:
+        logger.debug("YCrCb skin detection failed: %s", e)
+
+    # ── Approach 2: MediaPipe landmark detection ─────────────────────
     try:
         import mediapipe as mp
         if hasattr(mp, "solutions"):
-            hands = mp.solutions.hands.Hands(
+            _hands = mp.solutions.hands.Hands(
                 static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5,
             )
-            result = hands.process(img_array[:, :, ::-1].copy())
-            hands.close()
-            if result.multi_hand_landmarks:
+            _res = _hands.process(img_array[:, :, ::-1].copy())
+            _hands.close()
+            if _res.multi_hand_landmarks:
+                _pts = [(int(lm.x * w), int(lm.y * h)) for lm in _res.multi_hand_landmarks[0].landmark]
+                _pad = int(min(w, h) * 0.08)
+                _xs = [p[0] for p in _pts]
+                _ys = [p[1] for p in _pts]
                 logger.info("Hand detected via mp.solutions")
-                return [
-                    (int(lm.x * w), int(lm.y * h))
-                    for lm in result.multi_hand_landmarks[0].landmark
-                ]
+                return (
+                    max(0, min(_xs) - _pad),
+                    max(0, min(_ys) - _pad),
+                    min(w, max(_xs) + _pad),
+                    min(h, max(_ys) + _pad),
+                )
     except Exception as e:
-        logger.debug("mp.solutions approach failed: %s", e)
+        logger.debug("MediaPipe approach failed: %s", e)
 
-    # ── Approach 2: mp.tasks.vision (mediapipe >= 0.10.10) ─────────
+    # ── Approach 3: mp.tasks.vision (0.10.21+) ───────────────────────
     try:
-        from mediapipe.tasks import python as _mp_tasks
-        from mediapipe.tasks.python import vision as _mp_vision
+        from mediapipe.tasks import python as _mp_t
+        from mediapipe.tasks.python import vision as _mp_v
         import mediapipe as _mp2
+        import os as _os, urllib.request as _ul
 
-        model_path = "/tmp/hand_landmarker.task"
-        if not _os.path.exists(model_path):
-            import urllib.request as _urllib
-            _url = (
+        _mpath = "/tmp/hand_landmarker.task"
+        if not _os.path.exists(_mpath):
+            _ul.urlretrieve(
                 "https://storage.googleapis.com/mediapipe-models/"
                 "hand_landmarker/hand_landmarker/float16/latest/"
-                "hand_landmarker.task"
+                "hand_landmarker.task",
+                _mpath,
             )
-            _urllib.urlretrieve(_url, model_path)
-
-        _opts = _mp_vision.HandLandmarkerOptions(
-            base_options=_mp_tasks.BaseOptions(model_asset_path=model_path),
-            running_mode=_mp_vision.RunningMode.IMAGE,
-            num_hands=1,
-            min_hand_detection_confidence=0.5,
+        _det = _mp_v.HandLandmarker.create_from_options(
+            _mp_v.HandLandmarkerOptions(
+                base_options=_mp_t.BaseOptions(model_asset_path=_mpath),
+                running_mode=_mp_v.RunningMode.IMAGE,
+                num_hands=1,
+                min_hand_detection_confidence=0.5,
+            )
         )
-        _detector = _mp_vision.HandLandmarker.create_from_options(_opts)
-        _mp_img = _mp2.Image(image_format=_mp2.ImageFormat.SRGB, data=img_array)
-        _result = _detector.detect(_mp_img)
-        _detector.close()
-
-        if _result.hand_landmarks:
+        _r = _det.detect(_mp2.Image(image_format=_mp2.ImageFormat.SRGB, data=img_array))
+        _det.close()
+        if _r.hand_landmarks:
+            _pts2 = [(int(lm.x * w), int(lm.y * h)) for lm in _r.hand_landmarks[0]]
+            _pad2 = int(min(w, h) * 0.08)
+            _xs2 = [p[0] for p in _pts2]
+            _ys2 = [p[1] for p in _pts2]
             logger.info("Hand detected via mp.tasks")
-            return [
-                (int(lm.x * w), int(lm.y * h))
-                for lm in _result.hand_landmarks[0]
-            ]
+            return (
+                max(0, min(_xs2) - _pad2),
+                max(0, min(_ys2) - _pad2),
+                min(w, max(_xs2) + _pad2),
+                min(h, max(_ys2) + _pad2),
+            )
     except Exception as e:
         logger.debug("mp.tasks approach failed: %s", e)
 
@@ -960,8 +1002,8 @@ def _detect_hand_landmarks(img_array):
 
 
 def crop_hand_image(image: Image.Image) -> Image.Image:
-    """Detect hand using MediaPipe, crop tightly, and composite onto
-    dark background.  Falls back to center-crop or original."""
+    """Detect hand using CV preprocessing, crop tightly, and composite
+    onto dark background.  Falls back to center-crop."""
     import numpy as np
 
     if image.mode != "RGB":
@@ -973,35 +1015,36 @@ def crop_hand_image(image: Image.Image) -> Image.Image:
     if w < 64 or h < 64:
         return image
 
-    pts = _detect_hand_landmarks(img_array)
-    if pts is None:
+    bbox = _detect_hand_bbox(img_array)
+    if bbox is None:
         return _center_crop_fallback(image)
 
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
+    x1, y1, x2, y2 = bbox
 
-    # ── Bounding box ───────────────────────────────────────────────────
-    pad_x = int(w * 0.08)
-    pad_yt = int(h * 0.05)
-    pad_yb = int(h * 0.15)
-    x1 = max(0, min(xs) - pad_x)
-    y1 = max(0, min(ys) - pad_yt)
-    x2 = min(w, max(xs) + pad_x)
-    y2 = min(h, max(ys) + pad_yb)
+    # ── Create rough mask for background removal ─────────────────────
+    # Use skin-colour mask within the bounding box
+    R = img_array[:, :, 0].astype(np.float32)
+    G = img_array[:, :, 1].astype(np.float32)
+    B = img_array[:, :, 2].astype(np.float32)
+    Y  = 0.299 * R + 0.587 * G + 0.114 * B
+    Cr = (R - Y) * 0.713 + 128
+    Cb = (B - Y) * 0.564 + 128
+    skin = (Cr >= 133) & (Cr <= 173) & (Cb >= 77) & (Cb <= 127)
 
-    # ── Mask via PIL polygon + Gaussian blur ───────────────────────────
     mask = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(mask).polygon(pts, fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(radius=15))
+    mask_np = np.array(mask, dtype=np.uint8)
+    mask_np[skin] = 255
+    # Fill holes and smooth
+    mask = Image.fromarray(mask_np).filter(ImageFilter.GaussianBlur(radius=9))
 
-    # ── Composite onto dark background ─────────────────────────────────
-    mask_np = np.array(mask, dtype=np.float32) / 255.0
-    mask_3ch = np.stack([mask_np, mask_np, mask_np], axis=-1)
+    # ── Composite onto dark background ───────────────────────────────
+    mask_f = np.array(mask, dtype=np.float32) / 255.0
+    mask_3ch = np.stack([mask_f, mask_f, mask_f], axis=-1)
     dark_bg = np.full_like(img_array, (10, 10, 26), dtype=np.uint8)
     blended = (img_array * mask_3ch + dark_bg * (1 - mask_3ch)).astype(np.uint8)
     cropped = blended[y1:y2, x1:x2]
 
-    logger.info("MediaPipe hand crop (%d×%d → %d×%d)", w, h, x2 - x1, y2 - y1)
+    logger.info("Hand crop (%d×%d → %d×%d)", w, h, x2 - x1, y2 - y1)
     return Image.fromarray(cropped)
 
 
