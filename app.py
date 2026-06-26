@@ -2115,8 +2115,9 @@ def render_live_scanner(t):
 </html>
 """
 
-    import html as _html
-    _escaped = _html.escape(html_code)
+    # Only escape " so the srcdoc attribute isn't broken.
+    # Keep < > & as-is — the browser must parse actual HTML tags from srcdoc.
+    _escaped = html_code.replace('"', "&quot;")
     st.markdown(
         f'<iframe srcdoc="{_escaped}" width="100%" height="580" '
         f'allow="camera *; microphone *" '
