@@ -2157,14 +2157,12 @@ def render_live_scanner(t):
       // Landmark dots
       landmarks.forEach((lm, i) => {
         const x = lm.x * W, y = lm.y * H;
-        // Outer glow ring
         ctx.save();
         ctx.beginPath();
         ctx.arc(x, y, 10, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255,255,255,0.06)';
         ctx.fill();
         ctx.restore();
-        // Dot
         ctx.save();
         ctx.beginPath();
         ctx.arc(x, y, 4.5, 0, Math.PI * 2);
@@ -2174,6 +2172,26 @@ def render_live_scanner(t):
         ctx.fill();
         ctx.restore();
       });
+
+      // ── Bounding box ──────────────────────────────────────────────────
+      const xs = landmarks.map(lm => lm.x);
+      const ys = landmarks.map(lm => lm.y);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      const pad = 0.04;
+      const bx1 = Math.max(0, minX - pad) * W;
+      const by1 = Math.max(0, minY - pad) * H;
+      const bx2 = Math.min(1, maxX + pad) * W;
+      const by2 = Math.min(1, maxY + pad) * H;
+      ctx.save();
+      ctx.strokeStyle = '#4ade80';
+      ctx.lineWidth = 3;
+      ctx.shadowColor = 'rgba(74,222,128,0.6)';
+      ctx.shadowBlur = 12;
+      ctx.strokeRect(bx1, by1, bx2 - bx1, by2 - by1);
+      ctx.restore();
     }
 
     // ── Initialise MediaPipe ─────────────────────────────────────────────
