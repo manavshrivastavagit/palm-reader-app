@@ -6,12 +6,14 @@ Streamlit app that uses Gemini's multimodal vision to analyze palm images.
 import streamlit as st
 from typing import Optional
 from google import genai
-from PIL import Image
+from PIL import Image, ImageDraw
 import io
 import os
 import json
 import logging
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+import plotly.graph_objects as go
 
 # Setup logging
 logging.basicConfig(
@@ -21,6 +23,23 @@ logging.basicConfig(
 logger = logging.getLogger("hasthrekha")
 
 load_dotenv()
+
+# ─────────────────────────────────────────────
+# Structured API Response Schemas
+# ─────────────────────────────────────────────
+
+class PalmMetrics(BaseModel):
+    rationality: int = Field(description="Rating from 1 to 100 for logic, intellect, and analytical thinking style based on the Head Line")
+    emotionality: int = Field(description="Rating from 1 to 100 for emotional sensitivity, relationships, and depth of feelings based on the Heart Line")
+    vitality: int = Field(description="Rating from 1 to 100 for physical vitality, energy, and life drive based on the Life Line")
+    ambition: int = Field(description="Rating from 1 to 100 for ambition, focus, leadership, and career drive based on the Jupiter mount and Fate Line")
+    intuition: int = Field(description="Rating from 1 to 100 for intuition, creativity, and subconscious insights based on the Moon mount and markings")
+
+class PalmReadingResponse(BaseModel):
+    is_valid_hand: bool = Field(description="True if the uploaded image contains a visible human hand or open palm, False otherwise")
+    refusal_reason: str = Field(default="", description="If is_valid_hand is False, explain politely why the image is invalid and request a clear palm photo. Otherwise, leave empty.")
+    metrics: Optional[PalmMetrics] = Field(None, description="The palmistry metrics. Required if is_valid_hand is True.")
+    reading: str = Field("", description="The detailed markdown reading content. Required if is_valid_hand is True.")
 
 # ─────────────────────────────────────────────
 # Configuration
@@ -99,6 +118,7 @@ TRANSLATIONS = {
         "your_palm": "आपकी हथेली",
         "read_button": "🔮 हस्तरेखा विश्लेषण करें — {category}",
         "spinner_reading": "✨ हस्तरेखा शास्त्री आपके हाथ का अध्ययन कर रहे हैं...",
+        "detecting_lines": "🔍 पाम रेखाओं का पता लगाया जा रहा है...",
         "error_reading": "❌ विश्लेषण के दौरान त्रुटि: {error}",
         "new_reading": "🔄 नया विश्लेषण",
         "download_reading": "📥 विश्लेषण डाउनलोड करें",
@@ -118,7 +138,15 @@ TRANSLATIONS = {
         "github_label": "💻 गिटहब रिपोजिटरी",
         "linkedin_label": "🔗 लिंक्डइन प्रोफाइल",
         "app_intro": "हस्तरेखा शास्त्र (हस्तरेखा) हथेली के आकार, रेखाओं, पर्वतों और निशानों के अध्ययन के माध्यम से किसी व्यक्ति के चरित्र, ऊर्जा, क्षमता और जीवन पथ को समझने की एक प्राचीन कला और विज्ञान है। सदियों से विविध संस्कृतियों में उपयोग की जाने वाली यह पद्धति आत्म-चिंतन, अपनी क्षमता को समझने और जीवन मार्गदर्शन प्राप्त करने के लिए एक दर्पण का कार्य करती है।",
-        "footer_disclaimer": "⚠️ हस्तरेखा केवल मनोरंजन और आत्म-चिंतन के उद्देश्य से है। यह चिकित्सा, वित्तीय या व्यावसायिक सलाह प्रदान नहीं करती है।\n\nआपकी हथेली की तस्वीरें एआई द्वारा प्रोसेस की जाती हैं और इन्हें कहीं भी स्टोर नहीं किया जाता है।"
+        "footer_disclaimer": "⚠️ हस्तरेखा केवल मनोरंजन और आत्म-चिंतन के उद्देश्य से है। यह चिकित्सा, वित्तीय या व्यावसायिक सलाह प्रदान नहीं करती है।\n\nआपकी हथेली की तस्वीरें एआई द्वारा प्रोसेस की जाती हैं और इन्हें कहीं भी स्टोर नहीं किया जाता है।",
+        "tab_reading": "🔮 हस्तरेखा विश्लेषण",
+        "tab_live": "📷 लाइव स्कैनर",
+        "live_title": "🖐️ लाइव हस्त पहचान",
+        "live_caption": "अपनी हथेली कैमरे के सामने रखें। मीडियापाइप एआई तुरंत आपकी हस्त रेखाओं की पहचान करेगा।",
+        "live_tip": "💡 टिप: सर्वोत्तम पहचान के लिए अपना हाथ खुला रखें और अच्छी रोशनी सुनिश्चित करें।",
+        "live_snapshot_hint": "📸 पूर्ण एआई विश्लेषण के लिए **हस्तरेखा विश्लेषण** टैब का उपयोग करें।",
+        "scan_heading": "🔬 एआई दृष्टि विश्लेषण — हथेली स्कैन हो रही है...",
+        "scan_complete": "✅ हस्तेली स्कैन पूर्ण — विश्लेषण के लिए तैयार",
     },
     "en": {
         "app_title": "🔮🖐️ Hasthrekha",
@@ -155,27 +183,36 @@ TRANSLATIONS = {
         "camera_help": "Position your palm clearly in frame",
         "your_palm": "Your Palm",
         "read_button": "🔮 Read My Palm — {category}",
-        "spinner_reading": "✨ PalmGuide is studying your palm...",
+        "spinner_reading": "✨ Hasthrekha is studying your palm...",
+        "detecting_lines": "🔍 Detecting palm lines...",
         "error_reading": "❌ Error during reading: {error}",
         "new_reading": "🔄 New Reading",
         "download_reading": "📥 Download Reading",
         "copy_reading": "📋 Copy to Clipboard",
         "copy_toast": "📋 Reading copied!",
-        "chat_title": "💬 Ask PalmGuide a Follow-up Question",
+        "chat_title": "💬 Ask Hasthrekha a Follow-up Question",
         "chat_caption": "Ask anything about your reading — love, career, specific lines, or life guidance.",
         "chat_input_placeholder": "Ask about your palm reading...",
-        "chat_spinner": "PalmGuide is reflecting...",
+        "chat_spinner": "Hasthrekha is reflecting...",
         "ai_vision_title": "🔬 AI Vision Analysis",
         "ai_vision_desc": "Gemini's multimodal AI examines your palm lines, mounts, hand shape, and special markings with precision.",
         "traditions_title": "📜 Three Traditions",
         "traditions_desc": "Get readings grounded in Vedic, Western, and Chinese palmistry — or all three combined.",
         "chat_feature_title": "💬 Ask Follow-ups",
-        "chat_feature_desc": "Chat with PalmGuide about your reading. Ask about love, career, health, or any specific line.",
+        "chat_feature_desc": "Chat with Hasthrekha about your reading. Ask about love, career, health, or any specific line.",
         "portfolio_title": "👤 Manav Shrivastava — AI Solution Architect",
         "github_label": "💻 GitHub Repository",
         "linkedin_label": "🔗 LinkedIn Profile",
         "app_intro": "Palmistry (Hasthrekha) is the ancient art and science of reading the character, vitality, traits, and life path of an individual through the study of the shape, lines, mounts, and markings of the palm. Used across diverse cultures for centuries, it serves as a powerful mirror for self-reflection, understanding potential, and seeking guidance.",
-        "footer_disclaimer": "⚠️ Hasthrekha is for entertainment and self-reflection purposes only. It does not provide medical, financial, or professional advice.\n\nYour palm images are processed by AI and are not permanently stored."
+        "footer_disclaimer": "⚠️ Hasthrekha is for entertainment and self-reflection purposes only. It does not provide medical, financial, or professional advice.\n\nYour palm images are processed by AI and are not permanently stored.",
+        "tab_reading": "🔮 Palm Reading",
+        "tab_live": "📷 Live Scanner",
+        "live_title": "🖐️ Live Hand Detection",
+        "live_caption": "Hold your palm up to the camera. MediaPipe AI will detect and highlight your hand landmarks in real time.",
+        "live_tip": "💡 Tip: Open your hand flat towards the camera with good lighting for best detection results.",
+        "live_snapshot_hint": "📸 Use the **Palm Reading** tab to upload a snapshot for a full AI reading.",
+        "scan_heading": "🔬 AI Vision Analysis — Scanning Palm...",
+        "scan_complete": "✅ Palm Scan Complete — Ready for Reading",
     }
 }
 
@@ -661,20 +698,42 @@ def get_custom_css() -> str:
         box-shadow: 0 8px 25px rgba(168, 85, 247, 0.4);
     }}
 
-    /* Modern Chat Bubble styling */
+    /* Modern Chat Bubble styling with hover effects */
     .stChatMessage {{
-        background: rgba(255, 255, 255, 0.02) !important;
-        border: 1px solid rgba(255, 255, 255, 0.04) !important;
+        background: rgba(255, 255, 255, 0.03) !important;
+        border: 1px solid rgba(167, 139, 250, 0.1) !important;
         border-radius: 16px !important;
-        padding: 1rem !important;
-        margin-bottom: 0.8rem !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+        padding: 1.2rem !important;
+        margin-bottom: 1rem !important;
+        backdrop-filter: blur(12px) !important;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2) !important;
+        transition: all 0.3s ease !important;
     }}
-    /* Chat input focus */
+    .stChatMessage:hover {{
+        border-color: rgba(167, 139, 250, 0.3) !important;
+        box-shadow: 0 8px 32px 0 rgba(167, 139, 250, 0.1) !important;
+        background: rgba(255, 255, 255, 0.05) !important;
+    }}
+    
+    /* Modern Chat Input box styling */
+    .stChatInput {{
+        padding-bottom: 1.5rem !important;
+    }}
+    .stChatInput textarea {{
+        color: #f0f0f5 !important;
+        font-family: 'Outfit', sans-serif !important;
+    }}
     .stChatInput > div {{
-        border-color: rgba(167, 139, 250, 0.2) !important;
-        border-radius: 14px !important;
-        background-color: rgba(15, 10, 25, 0.6) !important;
+        border: 1px solid rgba(167, 139, 250, 0.2) !important;
+        border-radius: 20px !important;
+        background: rgba(21, 9, 38, 0.6) !important;
+        backdrop-filter: blur(16px) !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3) !important;
+        transition: all 0.3s ease !important;
+    }}
+    .stChatInput > div:focus-within {{
+        border-color: rgba(255, 179, 0, 0.6) !important;
+        box-shadow: 0 0 15px rgba(255, 179, 0, 0.25) !important;
     }}
 
     /* Spinner color */
@@ -743,10 +802,27 @@ def analyze_palm_stream(client: genai.Client, image: Image.Image, category: str,
     logger.info(f"Starting palm analysis (category={category}, tradition={tradition}, lang={lang})")
     prompt = build_reading_prompt(category, tradition, lang)
 
+    # PIL Image must be serialised to bytes — the GenAI client does not
+    # accept PIL objects; it would silently stringify them and Gemini
+    # would refuse with "this model does not support image input".
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format="PNG")
+    image_part = genai.types.Part.from_bytes(
+        data=img_byte_arr.getvalue(), mime_type="image/png"
+    )
+
     try:
         response_stream = client.models.generate_content_stream(
             model="gemini-2.5-flash",
-            contents=[prompt, image],
+            contents=[
+                genai.types.Content(
+                    role="user",
+                    parts=[
+                        genai.types.Part.from_text(text=prompt),
+                        image_part,
+                    ],
+                )
+            ],
             config=genai.types.GenerateContentConfig(
                 system_instruction=get_system_prompt(lang),
                 temperature=0.8,
@@ -829,7 +905,202 @@ def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str,
 
 
 # ─────────────────────────────────────────────
-# Session State Init
+# Hand Crop — MediaPipe + OpenCV
+# ─────────────────────────────────────────────
+
+def crop_hand_image(image: Image.Image) -> Image.Image:
+    """Detect hand using MediaPipe, crop tightly, and composite onto
+    dark theme background. Falls back to center-crop or original."""
+    import cv2
+    import numpy as np
+    import mediapipe as mp
+
+    if image.mode != "RGB":
+        img = image.convert("RGB")
+    else:
+        img = image.copy()
+    img_array = np.array(img)
+    h, w = img_array.shape[:2]
+    if w < 64 or h < 64:
+        return image
+
+    # ── Phase 1: MediaPipe hand landmark detection ────────────────────
+    hand_found = False
+    xs = ys = None
+    try:
+        hands = mp.solutions.hands.Hands(
+            static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5,
+        )
+        results = hands.process(cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR))
+        hands.close()
+
+        if results.multi_hand_landmarks:
+            pts = [
+                (int(lm.x * w), int(lm.y * h))
+                for lm in results.multi_hand_landmarks[0].landmark
+            ]
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            hand_found = True
+    except Exception as e:
+        logger.warning("MediaPipe hand detection failed: %s", e)
+
+    # ── Phase 2: compute bounding box ─────────────────────────────────
+    if hand_found:
+        pad_x = int(w * 0.08)
+        pad_yt = int(h * 0.05)
+        pad_yb = int(h * 0.15)
+        x1 = max(0, min(xs) - pad_x)
+        y1 = max(0, min(ys) - pad_yt)
+        x2 = min(w, max(xs) + pad_x)
+        y2 = min(h, max(ys) + pad_yb)
+
+        hull = cv2.convexHull(np.array([(x, y) for x, y in zip(xs, ys)]))
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask, [hull], 255)
+        mask = cv2.GaussianBlur(mask, (15, 15), 5)
+        mask_3ch = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR).astype(np.float32) / 255.0
+        dark_bg = np.full_like(img_array, (10, 10, 26), dtype=np.uint8)
+        blended = (img_array * mask_3ch + dark_bg * (1 - mask_3ch)).astype(np.uint8)
+        cropped = blended[y1:y2, x1:x2]
+        logger.info("MediaPipe hand crop (%d×%d → %d×%d)", w, h, x2 - x1, y2 - y1)
+        return Image.fromarray(cropped)
+
+    # ── Phase 3: fallback center-crop (hand is usually centred in frame) ─
+    logger.info("Hand not detected — applying centred crop fallback")
+    side = min(w, h)
+    crop_size = int(side * 0.72)
+    x1 = (w - crop_size) // 2
+    y1 = (h - crop_size) // 2
+    x2 = x1 + crop_size
+    y2 = y1 + crop_size
+    fallback = img_array[y1:y2, x1:x2]
+
+    # Composite onto dark background so it blends with the app theme
+    dark_bg = np.full_like(fallback, (10, 10, 26), dtype=np.uint8)
+    # Soft vignette fade at edges
+    mask_fb = np.ones((crop_size, crop_size), dtype=np.float32)
+    edge = int(crop_size * 0.05)
+    mask_fb = cv2.GaussianBlur(mask_fb, (edge * 2 + 1, edge * 2 + 1), edge // 2)
+    mask_fb = np.clip(mask_fb * 1.5, 0, 1)
+    mask_3ch_fb = np.stack([mask_fb, mask_fb, mask_fb], axis=-1)
+    blended_fb = (fallback * mask_3ch_fb + dark_bg * (1 - mask_3ch_fb)).astype(np.uint8)
+    return Image.fromarray(blended_fb)
+
+
+# ─────────────────────────────────────────────
+# Palm Line Detection — Gemini
+# ─────────────────────────────────────────────
+
+def detect_palm_lines(client: genai.Client, image: Image.Image, t: dict) -> dict:
+    """Ask Gemini to detect heart, head, and life lines and return coordinates.
+
+    Returns a dict keyed by line id with arrays of [x,y] normalized control
+    points (0-1).  Also estimates fate/sun/mercury from the detected lines.
+    Returns empty dict on failure (caller falls back to defaults).
+    """
+    import numpy as np
+
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format="PNG")
+
+    prompt = (
+        "You are a palmistry expert. Analyze this palm image and detect "
+        "the three major palm lines — Heart Line, Head Line, Life Line.\n\n"
+        "For each line, return 4 to 5 control points as [x, y] coordinates "
+        "normalized to 0–1 range (top-left = [0,0], bottom-right = [1,1]).\n"
+        "Trace the actual visible curve of each line on THIS specific hand.\n\n"
+        "Line descriptions:\n"
+        "- Heart Line: starts below the index finger, arcs across the upper palm\n"
+        "- Head Line: starts near the thumb base, runs across the mid-palm\n"
+        "- Life Line: curves around the thumb mound, runs toward the wrist\n\n"
+        "Return ONLY valid JSON with no markdown fences or extra text:\n"
+        '{"heart":[[x1,y1],[x2,y2],[x3,y3],[x4,y4],[x5,y5]],'
+        '"head":[[x1,y1],[x2,y2],[x3,y3],[x4,y4],[x5,y5]],'
+        '"life":[[x1,y1],[x2,y2],[x3,y3],[x4,y4],[x5,y5]]}'
+    )
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                genai.types.Content(
+                    role="user",
+                    parts=[
+                        genai.types.Part.from_text(text=prompt),
+                        genai.types.Part.from_bytes(
+                            data=img_byte_arr.getvalue(), mime_type="image/png"
+                        ),
+                    ],
+                )
+            ],
+            config=genai.types.GenerateContentConfig(
+                temperature=0.2,
+                max_output_tokens=1024,
+            ),
+        )
+        text = response.text.strip()
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+        lines = json.loads(text)
+    except Exception as e:
+        logger.warning("Gemini line detection failed: %s", e)
+        return {}
+
+    # Validate — each must have 4+ points
+    for key in ("heart", "head", "life"):
+        pts = lines.get(key)
+        if not isinstance(pts, list) or len(pts) < 4:
+            logger.warning("Gemini returned invalid %s line", key)
+            return {}
+        lines[key] = [[float(x), float(y)] for x, y in pts]
+
+    # ── Estimate fate, sun, mercury from detected heart/head/life ──
+    heart = np.array(lines["heart"])
+    head = np.array(lines["head"])
+    life = np.array(lines["life"])
+
+    # Fate: vertical through palm center, from wrist (life bottom) to middle-finger base (heart top-center)
+    life_bottom_y = float(np.max(life[:, 1]))
+    heart_center_x = float(np.mean(heart[:, 0]))
+    heart_top_y = float(np.min(heart[:, 1]))
+    lines["fate"] = [
+        [heart_center_x, life_bottom_y],
+        [heart_center_x, life_bottom_y - 0.14],
+        [heart_center_x, life_bottom_y - 0.28],
+        [heart_center_x, heart_top_y + 0.06],
+        [heart_center_x, heart_top_y],
+    ]
+
+    # Sun: parallel to fate, shifted toward ring finger
+    sun_x = min(1.0, heart_center_x + 0.16)
+    lines["sun"] = [
+        [sun_x, life_bottom_y],
+        [sun_x, life_bottom_y - 0.14],
+        [sun_x, life_bottom_y - 0.28],
+        [sun_x, heart_top_y + 0.06],
+        [sun_x, heart_top_y],
+    ]
+
+    # Mercury: further right toward pinky
+    merc_x = min(1.0, heart_center_x + 0.30)
+    lines["mercury"] = [
+        [merc_x, life_bottom_y],
+        [merc_x, life_bottom_y - 0.14],
+        [merc_x, life_bottom_y - 0.28],
+        [merc_x, heart_top_y + 0.06],
+        [merc_x, heart_top_y],
+    ]
+
+    logger.info("Palm lines detected: heart=%d, head=%d, life=%d",
+                len(lines["heart"]), len(lines["head"]), len(lines["life"]))
+    return lines
+
+
+# ─────────────────────────────────────────────
+# Session State
 # ─────────────────────────────────────────────
 
 def init_session_state():
@@ -843,6 +1114,10 @@ def init_session_state():
         "selected_category": None,
         "selected_tradition": None,
         "last_uploaded_file_id": None,
+        "loading": False,
+        "scan_done": False,  # tracks if scanning animation already ran
+        "_clean_img_bytes": None,  # cached clean PNG bytes (no EXIF/metadata)
+        "palm_lines": None,  # Gemini-detected palm line coordinates
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1001,8 +1276,505 @@ def render_palm_display(image: Image.Image, t):
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown('<div class="palm-image-container">', unsafe_allow_html=True)
-        st.image(image, caption=t["your_palm"], width="stretch")
+        # Convert to bytes before passing to st.image() to avoid
+        # Streamlit PIL serialization issues with dirty metadata
+        _buf = io.BytesIO()
+        image.save(_buf, format="PNG")
+        st.image(_buf.getvalue(), caption=t["your_palm"], width="stretch")
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_palm_scanning_animation(image: Image.Image, t, palm_lines=None):
+    """Display a cinematic AI palm scanning animation over the uploaded palm image."""
+    import base64
+    buf = io.BytesIO()
+    # Resize to a sensible canvas size before base64 encoding
+    display_img = image.copy()
+    display_img.thumbnail((640, 640))
+    display_img.save(buf, format="PNG")
+    img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    # Serialise Gemini-detected palm lines for the JS
+    palm_lines_json = json.dumps(palm_lines or {})
+
+    scan_heading  = t.get("scan_heading", "🔬 AI Vision Analysis — Scanning Palm...")
+    scan_complete = t.get("scan_complete", "✅ Palm Scan Complete — Ready for Reading")
+
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ font-family: 'Segoe UI', system-ui; display: flex; flex-direction: column;
+      align-items: center; justify-content: start; min-height: 100vh; padding: 12px 0;
+      background: #0a0a1a; }}
+    #wrapper {{
+      position: relative; width: 100%; max-width: 520px;
+      border-radius: 18px; overflow: hidden;
+      border: 2px solid rgba(167,139,250,0.4);
+      box-shadow: 0 0 40px rgba(124,58,237,0.3), 0 0 80px rgba(124,58,237,0.1);
+    }}
+    #palmImg {{
+      display: block; width: 100%; border-radius: 18px;
+    }}
+    #overlay {{
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none; border-radius: 18px;
+    }}
+    #statusBar {{
+      width: 100%; max-width: 520px; margin-top: 12px;
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+    }}
+    #statusText {{
+      color: #a78bfa; font-size: 0.82rem; letter-spacing: 1.2px;
+      text-transform: uppercase; font-weight: 600;
+      transition: color 0.6s;
+    }}
+    #progressTrack {{
+      width: 100%; height: 4px;
+      background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden;
+    }}
+    #progressBar {{
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #7c3aed, #a855f7, #fbbf24);
+      border-radius: 4px;
+      transition: width 0.12s ease-out;
+      box-shadow: 0 0 12px rgba(168,85,247,0.6);
+    }}
+    #featureTags {{
+      display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 4px;
+    }}
+    .ftag {{
+      padding: 3px 12px; border-radius: 20px; font-size: 0.72rem; font-weight: 700;
+      letter-spacing: 0.5px; opacity: 0;
+      transition: opacity 0.5s, transform 0.5s;
+      transform: translateY(6px);
+    }}
+    .ftag.show {{ opacity: 1; transform: translateY(0); }}
+  </style>
+</head>
+<body>
+  <div id="wrapper">
+    <img id="palmImg" src="data:image/png;base64,{img_b64}">
+    <canvas id="overlay"></canvas>
+  </div>
+  <div id="statusBar">
+    <span id="statusText">⏳ Initialising AI scanner...</span>
+    <div id="progressTrack"><div id="progressBar"></div></div>
+    <div id="featureTags"></div>
+  </div>
+
+  <script>
+  (function() {{
+    const canvas  = document.getElementById('overlay');
+    const ctx     = canvas.getContext('2d');
+    const img     = document.getElementById('palmImg');
+    const status  = document.getElementById('statusText');
+    const pBar    = document.getElementById('progressBar');
+    const tagsDiv = document.getElementById('featureTags');
+
+    // ── Default bezier control points (approximate palm proportions)
+    const DEFAULT_PTS = {{
+      heart: [[0.12,0.38],[0.26,0.28],[0.48,0.25],[0.70,0.29],[0.86,0.37]],
+      head:  [[0.10,0.52],[0.28,0.50],[0.50,0.52],[0.70,0.56],[0.84,0.63]],
+      life:  [[0.34,0.28],[0.26,0.44],[0.22,0.60],[0.24,0.76],[0.34,0.86]],
+      fate:  [[0.50,0.88],[0.50,0.72],[0.50,0.56],[0.50,0.40],[0.50,0.28]],
+      sun:   [[0.67,0.82],[0.66,0.68],[0.65,0.56],[0.65,0.44]],
+      mercury: [[0.80,0.76],[0.78,0.64],[0.77,0.54],[0.77,0.44]],
+    }};
+
+    // ── Gemini-detected palm lines (empty object = use defaults)
+    const USER_PTS = {palm_lines_json};
+
+    const FEATURES = [
+      {{
+        id: 'heart', label: '\u2764\ufe0f Heart Line', color: '#f43f5e', glow: 'rgba(244,63,94,0.55)',
+        pts: USER_PTS.heart || DEFAULT_PTS.heart,
+      }},
+      {{
+        id: 'head', label: '\ud83e\udde0 Head Line', color: '#38bdf8', glow: 'rgba(56,189,248,0.55)',
+        pts: USER_PTS.head || DEFAULT_PTS.head,
+      }},
+      {{
+        id: 'life', label: '\ud83c\udf3f Life Line', color: '#4ade80', glow: 'rgba(74,222,128,0.55)',
+        pts: USER_PTS.life || DEFAULT_PTS.life,
+      }},
+      {{
+        id: 'fate', label: '\u26a1 Fate Line', color: '#fbbf24', glow: 'rgba(251,191,36,0.55)',
+        pts: USER_PTS.fate || DEFAULT_PTS.fate,
+      }},
+      {{
+        id: 'sun', label: '\u2600\ufe0f Sun Line', color: '#fb923c', glow: 'rgba(251,146,60,0.55)',
+        pts: USER_PTS.sun || DEFAULT_PTS.sun,
+      }},
+      {{
+        id: 'mercury', label: '\u2606 Mercury Line', color: '#e879f9', glow: 'rgba(232,121,249,0.55)',
+        pts: USER_PTS.mercury || DEFAULT_PTS.mercury,
+      }},
+    ];
+
+    const MOUNTS = [
+      {{ label: '\u2648 Jupiter', x: 0.23, y: 0.24, color: '#a78bfa' }},
+      {{ label: '\u2649 Saturn',  x: 0.38, y: 0.20, color: '#fbbf24' }},
+      {{ label: '\u2650 Apollo',  x: 0.56, y: 0.21, color: '#f97316' }},
+      {{ label: '\u2643 Mercury', x: 0.72, y: 0.24, color: '#e879f9' }},
+      {{ label: '\u2640 Venus',   x: 0.25, y: 0.72, color: '#f43f5e' }},
+      {{ label: '\u263d Moon',    x: 0.78, y: 0.72, color: '#38bdf8' }},
+    ];
+
+    // ── State
+    let W, H;
+    let scanY    = 0;
+    let phase    = 0;   // 0=boot, 1=scan, 2=lines, 3=mounts, 4=done
+    let lineProgress = [];
+    let mountProgress = [];
+    let particles = [];
+    let startTime = 0;
+    let progress  = 0;  // 0-100
+    let pulseDone = false;
+    let pulseAlpha = 0;
+    // Continuous looping xerox-style scanner line
+    let loopScanY = 0;
+    const LOOP_SCAN_SPEED = 0.00015; // fraction of H per ms
+
+    FEATURES.forEach(() => lineProgress.push(0));
+    MOUNTS.forEach(() => mountProgress.push(0));
+
+    // ── Helpers
+    function lerp(a,b,t) {{ return a + (b-a)*t; }}
+    function clamp(v,lo,hi) {{ return Math.max(lo,Math.min(hi,v)); }}
+    function ease(t) {{ return t<0.5 ? 2*t*t : -1+(4-2*t)*t; }}
+
+    function resize() {{
+      W = canvas.width  = img.offsetWidth;
+      H = canvas.height = img.offsetHeight;
+    }}
+
+    // ── Particles for boot phase
+    function spawnParticles() {{
+      particles = [];
+      for (let i=0; i<38; i++) {{
+        particles.push({{
+          x: Math.random(), y: Math.random(),
+          vx: (Math.random()-0.5)*0.0007,
+          vy: (Math.random()-0.5)*0.0007,
+          r: Math.random()*1.5+0.5,
+          a: Math.random()*0.5+0.2,
+          color: ['#a78bfa','#fbbf24','#38bdf8','#4ade80'][Math.floor(Math.random()*4)]
+        }});
+      }}
+    }}
+
+    function drawParticles(alpha) {{
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      particles.forEach(p => {{
+        p.x += p.vx; p.y += p.vy;
+        if (p.x<0) p.x=1; if (p.x>1) p.x=0;
+        if (p.y<0) p.y=1; if (p.y>1) p.y=0;
+        ctx.beginPath();
+        ctx.arc(p.x*W, p.y*H, p.r, 0, Math.PI*2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+      }});
+      ctx.restore();
+    }}
+
+    // ── Draw scanning beam
+    function drawScanBeam(y) {{
+      const grad = ctx.createLinearGradient(0, y-40, 0, y+40);
+      grad.addColorStop(0, 'rgba(124,58,237,0)');
+      grad.addColorStop(0.5, 'rgba(167,139,250,0.55)');
+      grad.addColorStop(1, 'rgba(124,58,237,0)');
+      ctx.save();
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, y-40, W, 80);
+
+      // bright centre line
+      ctx.beginPath();
+      ctx.moveTo(0, y); ctx.lineTo(W, y);
+      ctx.strokeStyle = 'rgba(200,180,255,0.95)';
+      ctx.lineWidth = 1.5;
+      ctx.shadowColor = '#a78bfa';
+      ctx.shadowBlur = 18;
+      ctx.stroke();
+      ctx.restore();
+    }}
+
+    // ── Draw scan grid overlay
+    function drawGrid(alpha) {{
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.12;
+      ctx.strokeStyle = '#a78bfa';
+      ctx.lineWidth = 0.5;
+      const step = 24;
+      for (let x=0; x<W; x+=step) {{ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }}
+      for (let y=0; y<H; y+=step) {{ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }}
+      ctx.restore();
+    }}
+
+    // ── Draw a bezier chain with animated progress
+    function drawLine(feature, prog) {{
+      const pts = feature.pts;
+      if (prog <= 0 || pts.length < 2) return;
+      const totalSegs = pts.length - 1;
+      const drawn = prog * totalSegs;
+
+      ctx.save();
+      ctx.strokeStyle = feature.color;
+      ctx.lineWidth = 3;
+      ctx.shadowColor = feature.glow;
+      ctx.shadowBlur = 16;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0]*W, pts[0][1]*H);
+
+      for (let i=0; i<totalSegs; i++) {{
+        const frac = clamp(drawn - i, 0, 1);
+        if (frac <= 0) break;
+        const ax = pts[i][0]*W,   ay = pts[i][1]*H;
+        const bx = pts[i+1][0]*W, by = pts[i+1][1]*H;
+        const cpx = lerp(ax,bx,0.5), cpy = lerp(ay,by,0.5);
+        ctx.bezierCurveTo(cpx, ay, cpx, by, lerp(ax,bx,frac), lerp(ay,by,frac));
+      }}
+      ctx.stroke();
+
+      // Leading dot glow
+      const segIdx = Math.min(Math.floor(drawn), totalSegs-1);
+      const segFrac = drawn - Math.floor(drawn);
+      const lx = lerp(pts[segIdx][0], pts[segIdx+1]?pts[segIdx+1][0]:pts[segIdx][0], segFrac) * W;
+      const ly = lerp(pts[segIdx][1], pts[segIdx+1]?pts[segIdx+1][1]:pts[segIdx][1], segFrac) * H;
+      ctx.beginPath();
+      ctx.arc(lx, ly, 6, 0, Math.PI*2);
+      ctx.fillStyle = feature.color;
+      ctx.shadowBlur = 28;
+      ctx.fill();
+      ctx.restore();
+    }}
+
+    // ── Draw mount label pip
+    function drawMount(mount, alpha) {{
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(mount.x*W, mount.y*H, 6, 0, Math.PI*2);
+      ctx.fillStyle = mount.color;
+      ctx.shadowColor = mount.color;
+      ctx.shadowBlur = 18;
+      ctx.fill();
+
+      ctx.font = '9px Segoe UI';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowBlur = 0;
+      ctx.fillText(mount.label, mount.x*W + 8, mount.y*H + 3);
+      ctx.restore();
+    }}
+
+    // ── Draw final done pulse
+    function drawDonePulse(alpha) {{
+      const cx = W/2, cy = H/2;
+      [80, 130, 180].forEach((r,i) => {{
+        const a = Math.max(0, alpha - i*0.15);
+        ctx.save();
+        ctx.globalAlpha = a;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI*2);
+        ctx.strokeStyle = '#a78bfa';
+        ctx.lineWidth = 1.2;
+        ctx.shadowColor = '#7c3aed';
+        ctx.shadowBlur = 20;
+        ctx.stroke();
+        ctx.restore();
+      }});
+    }}
+
+    // ── Add feature tag to bar
+    const tagMap = {{}};
+    function showTag(id, label, color) {{
+      if (tagMap[id]) return;
+      const el = document.createElement('span');
+      el.className = 'ftag';
+      el.textContent = label;
+      el.style.background = color + '22';
+      el.style.border = '1px solid ' + color + '66';
+      el.style.color = color;
+      tagsDiv.appendChild(el);
+      tagMap[id] = el;
+      requestAnimationFrame(() => el.classList.add('show'));
+    }}
+
+    // ── Main animation loop
+    let lastTs = 0;
+    const SCAN_DURATION   = 2200;  // ms full sweep
+    const LINE_DURATION   = 280;   // ms per line
+    const MOUNT_DURATION  = 120;   // ms per mount
+    const PULSE_DURATION  = 1000;  // ms done pulse
+
+    let lineStartTimes = [];
+    let mountStartTimes = [];
+    let linePhaseStart = 0;
+    let mountPhaseStart = 0;
+    let doneStart = 0;
+
+    // ── Continuous xerox scanner line (drawn each frame regardless of phase)
+    function drawLoopScanLine(y) {{
+      const grad = ctx.createLinearGradient(0, y-20, 0, y+20);
+      grad.addColorStop(0, 'rgba(124,58,237,0)');
+      grad.addColorStop(0.5, 'rgba(200,180,255,0.18)');
+      grad.addColorStop(1, 'rgba(124,58,237,0)');
+      ctx.save();
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, y-20, W, 40);
+      ctx.beginPath();
+      ctx.moveTo(0, y); ctx.lineTo(W, y);
+      ctx.strokeStyle = 'rgba(200,180,255,0.30)';
+      ctx.lineWidth = 1;
+      ctx.shadowColor = '#a78bfa';
+      ctx.shadowBlur = 6;
+      ctx.stroke();
+      ctx.restore();
+    }}
+
+    function tick(ts) {{
+      if (!startTime) {{ startTime = ts; spawnParticles(); }}
+      const elapsed = ts - startTime;
+
+      // Update continuous looping scanner line (top→bottom loop)
+      loopScanY += LOOP_SCAN_SPEED * (ts - (lastTs||ts));
+      if (loopScanY > 1) loopScanY -= 1;
+      lastTs = ts;
+
+      resize();
+      ctx.clearRect(0, 0, W, H);
+
+      // ── Phase 0: SCAN SWEEP
+      if (phase === 0) {{
+        status.textContent = '🔍 Scanning biometric palm data...';
+        const t = clamp(elapsed / SCAN_DURATION, 0, 1);
+        scanY = ease(t) * H;
+        progress = Math.round(t * 35);
+        pBar.style.width = progress + '%';
+        drawGrid(t);
+        drawParticles(0.6);
+        // draw faint hex corners
+        ctx.save();
+        ctx.strokeStyle = 'rgba(167,139,250,0.25)';
+        ctx.lineWidth = 1;
+        [[0.05,0.05],[0.95,0.05],[0.05,0.95],[0.95,0.95]].forEach(([rx,ry]) => {{
+          const cx=rx*W, cy=ry*H, s=18;
+          ctx.beginPath(); ctx.moveTo(cx,cy+s); ctx.lineTo(cx,cy);
+          ctx.lineTo(cx+s*(rx>0.5?-1:1), cy); ctx.stroke();
+        }});
+        ctx.restore();
+        drawScanBeam(scanY);
+        if (t >= 1) {{
+          phase = 1;
+          linePhaseStart = ts;
+          FEATURES.forEach((_,i) => lineStartTimes[i] = ts + i * (LINE_DURATION * 1.1));
+        }}
+      }}
+
+      // ── Phase 1: LINE DETECTION
+      if (phase === 1) {{
+        status.textContent = '🧬 Detecting palm lines...';
+        let allDone = true;
+        FEATURES.forEach((f, i) => {{
+          const lt = lineStartTimes[i];
+          if (!lt) return;
+          const lp = clamp((ts - lt) / LINE_DURATION, 0, 1);
+          lineProgress[i] = ease(lp);
+          drawLine(f, lineProgress[i]);
+          if (lp >= 0.5) showTag(f.id, f.label, f.color);
+          if (lp < 1) allDone = false;
+        }});
+        progress = 35 + Math.round((ts - linePhaseStart) / (LINE_DURATION * FEATURES.length * 1.1) * 35);
+        pBar.style.width = Math.min(progress, 70) + '%';
+        drawGrid(0.5);
+        if (allDone) {{
+          phase = 2;
+          mountPhaseStart = ts;
+          MOUNTS.forEach((_,i) => mountStartTimes[i] = ts + i * MOUNT_DURATION);
+        }}
+      }}
+
+      // ── Phase 2: MOUNT LABELS
+      if (phase === 2) {{
+        status.textContent = '🏛️ Identifying palm mounts...';
+        let allDone = true;
+        FEATURES.forEach((f,i) => drawLine(f, lineProgress[i]));
+        MOUNTS.forEach((m,i) => {{
+          const mt = mountStartTimes[i];
+          const mp = clamp((ts - mt) / MOUNT_DURATION, 0, 1);
+          mountProgress[i] = ease(mp);
+          drawMount(m, mountProgress[i]);
+          if (mp < 1) allDone = false;
+        }});
+        progress = 70 + Math.round((ts - mountPhaseStart) / (MOUNT_DURATION * MOUNTS.length) * 22);
+        pBar.style.width = Math.min(progress, 92) + '%';
+        if (allDone) {{ phase = 3; doneStart = ts; }}
+      }}
+
+      // ── Phase 3: DONE PULSE
+      if (phase === 3) {{
+        FEATURES.forEach((f,i) => drawLine(f, lineProgress[i]));
+        MOUNTS.forEach((m,i) => drawMount(m, mountProgress[i]));
+        const tp = clamp((ts - doneStart) / PULSE_DURATION, 0, 1);
+        pulseAlpha = Math.sin(tp * Math.PI);
+        drawDonePulse(pulseAlpha);
+        progress = 92 + Math.round(tp * 8);
+        pBar.style.width = Math.min(progress, 100) + '%';
+        status.textContent = '\u2728 Composing reading...';
+        if (tp >= 1) {{
+          phase = 4;
+          pBar.style.width = '100%';
+          pBar.style.background = 'linear-gradient(90deg,#4ade80,#22d3ee,#a855f7)';
+          status.textContent = '{scan_complete}';
+          status.style.color = '#4ade80';
+        }}
+      }}
+
+      if (phase === 4) {{
+        // Static final state — all lines + mounts
+        FEATURES.forEach((f,i) => drawLine(f, lineProgress[i]));
+        MOUNTS.forEach((m,i) => drawMount(m, 0.85));
+        // subtle outer glow border pulse
+        const pulse = 0.5 + 0.5*Math.sin(ts/600);
+        ctx.save();
+        ctx.strokeStyle = `rgba(74,222,128,${{pulse*0.6}})`;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(1.5,1.5,W-3,H-3);
+        ctx.restore();
+      }}
+
+      // Continuous xerox scanner line overlay (always visible, all phases)
+      drawLoopScanLine(loopScanY * H);
+
+      if (phase < 4) requestAnimationFrame(tick);
+      else requestAnimationFrame(tick); // keep alive for border pulse
+    }}
+
+    img.onload = () => requestAnimationFrame(tick);
+    if (img.complete) requestAnimationFrame(tick);
+  }})();
+  </script>
+</body>
+</html>
+"""
+    import streamlit.components.v1 as components
+    st.markdown(
+        f'<p style="text-align:center;color:#a78bfa;font-weight:600;font-size:0.88rem;'
+        f'letter-spacing:1px;text-transform:uppercase;margin:8px 0 2px;">{scan_heading}</p>',
+        unsafe_allow_html=True
+    )
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        # Sanitise against surrogates that crash protobuf serialization
+        safe = html.encode("utf-8", errors="replace").decode("utf-8")
+        components.html(safe, height=500, scrolling=False)
 
 
 def render_reading_result(reading: str):
@@ -1030,12 +1802,247 @@ def render_chat_section(client: genai.Client, image: Image.Image, reading: str, 
             st.markdown(question)
         st.session_state.chat_history.append({"role": "user", "content": question})
 
-        # Get AI response
+        # Get AI response with loader
         with st.chat_message("assistant", avatar="🔮"):
-            stream = chat_followup_stream(client, image, reading, st.session_state.chat_history, question, st.session_state.app_lang)
-            response = st.write_stream(stream)
+            with st.spinner(t["chat_spinner"]):
+                stream = chat_followup_stream(client, image, reading, st.session_state.chat_history, question, st.session_state.app_lang)
+                response = st.write_stream(stream)
         st.session_state.chat_history.append({"role": "assistant", "content": response})
         st.rerun()
+
+
+def render_live_scanner(t):
+    """Render the live webcam palm/hand scanner using MediaPipe JS running in-browser."""
+    st.markdown(f"### {t['live_title']}")
+    st.caption(t["live_caption"])
+    st.info(t["live_tip"])
+    st.markdown(t["live_snapshot_hint"])
+
+    # Self-contained MediaPipe Hand Landmarker component running entirely client-side.
+    # Uses MediaPipe JS v0.10 tasks-vision for zero-latency, GPU-accelerated inference.
+    html_code = """
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: transparent;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: 'Segoe UI', sans-serif;
+      padding: 8px;
+    }
+    #container {
+      position: relative;
+      width: 100%;
+      max-width: 680px;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 0 30px rgba(167,139,250,0.25);
+      border: 2px solid rgba(167,139,250,0.35);
+    }
+    #webcam, #canvas {
+      width: 100%;
+      display: block;
+      border-radius: 16px;
+    }
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    #status {
+      margin-top: 10px;
+      color: #a78bfa;
+      font-size: 0.85rem;
+      letter-spacing: 0.5px;
+      text-align: center;
+    }
+    #badge {
+      display: none;
+      margin-top: 8px;
+      padding: 6px 18px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-align: center;
+    }
+    .badge-detected {
+      background: rgba(74,222,128,0.15);
+      border: 1px solid rgba(74,222,128,0.45);
+      color: #4ade80;
+    }
+    .badge-none {
+      background: rgba(248,113,113,0.12);
+      border: 1px solid rgba(248,113,113,0.35);
+      color: #f87171;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
+  <p id="status">⏳ Loading MediaPipe Hand Landmarker...</p>
+  <div id="badge"></div>
+
+  <!-- MediaPipe JS CDN -->
+  <script type="module">
+    import { HandLandmarker, FilesetResolver } from
+      'https://unpkg.com/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs';
+
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    const badge = document.getElementById('badge');
+
+    // ── MediaPipe hand connections ──────────────────────────────────────
+    const CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],         // thumb
+      [0,5],[5,6],[6,7],[7,8],         // index
+      [0,9],[9,10],[10,11],[11,12],    // middle
+      [0,13],[13,14],[14,15],[15,16],  // ring
+      [0,17],[17,18],[18,19],[19,20],  // pinky
+      [5,9],[9,13],[13,17]             // palm arch
+    ];
+
+    // ── Cosmic color palette ────────────────────────────────────────────
+    const JOINT_COLORS = [
+      '#ffd54f', // wrist
+      '#e040fb','#ce93d8','#ba68c8','#9c27b0',  // thumb
+      '#64b5f6','#42a5f5','#2196f3','#1565c0',  // index
+      '#81c784','#66bb6a','#4caf50','#2e7d32',  // middle
+      '#ffb74d','#ffa726','#ff9800','#e65100',  // ring
+      '#ef9a9a','#ef5350','#e53935','#b71c1c',  // pinky
+    ];
+    const CONN_COLOR_PALM  = 'rgba(167,139,250,0.9)';
+    const CONN_COLOR_FINGER= 'rgba(255,213,79,0.85)';
+    const GLOW_COLOR       = 'rgba(167,139,250,0.18)';
+
+    // ── Draw overlay ────────────────────────────────────────────────────
+    function drawHand(landmarks) {
+      const W = canvas.width, H = canvas.height;
+
+      // Glow pass (fat semi-transparent lines behind)
+      ctx.save();
+      ctx.lineWidth = 14;
+      ctx.strokeStyle = GLOW_COLOR;
+      CONNECTIONS.forEach(([a, b]) => {
+        ctx.beginPath();
+        ctx.moveTo(landmarks[a].x * W, landmarks[a].y * H);
+        ctx.lineTo(landmarks[b].x * W, landmarks[b].y * H);
+        ctx.stroke();
+      });
+      ctx.restore();
+
+      // Main connection lines
+      CONNECTIONS.forEach(([a, b]) => {
+        const isPalmConn = [5,9,13,17].includes(a) && [9,13,17].includes(b)
+          || (a===0 && [5,9,13,17].includes(b));
+        ctx.save();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = isPalmConn ? CONN_COLOR_PALM : CONN_COLOR_FINGER;
+        ctx.shadowColor = isPalmConn ? 'rgba(167,139,250,0.8)' : 'rgba(255,213,79,0.7)';
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.moveTo(landmarks[a].x * W, landmarks[a].y * H);
+        ctx.lineTo(landmarks[b].x * W, landmarks[b].y * H);
+        ctx.stroke();
+        ctx.restore();
+      });
+
+      // Landmark dots
+      landmarks.forEach((lm, i) => {
+        const x = lm.x * W, y = lm.y * H;
+        // Outer glow ring
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, 10, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fill();
+        ctx.restore();
+        // Dot
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = JOINT_COLORS[i] || '#ffffff';
+        ctx.shadowColor = JOINT_COLORS[i] || '#ffffff';
+        ctx.shadowBlur = 12;
+        ctx.fill();
+        ctx.restore();
+      });
+    }
+
+    // ── Initialise MediaPipe ─────────────────────────────────────────────
+    const vision = await FilesetResolver.forVisionTasks(
+      'https://unpkg.com/@mediapipe/tasks-vision@0.10.3/wasm'
+    );
+    const handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+        delegate: 'GPU'
+      },
+      runningMode: 'VIDEO',
+      numHands: 2
+    });
+
+    // ── Start camera ─────────────────────────────────────────────────────
+    status.textContent = '📷 Starting camera...';
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720 } });
+    video.srcObject = stream;
+    await new Promise(res => video.onloadeddata = res);
+    status.textContent = '✅ Camera ready — raise your palm!';
+    badge.style.display = 'block';
+
+    // ── Detection loop ───────────────────────────────────────────────────
+    let lastTs = -1;
+    let noHandFrames = 0;
+    const NO_HAND_THRESHOLD = 8;
+
+    function detect() {
+      if (video.readyState < 2) { requestAnimationFrame(detect); return; }
+
+      const now = performance.now();
+      if (now === lastTs) { requestAnimationFrame(detect); return; }
+      lastTs = now;
+
+      canvas.width  = video.videoWidth  || 640;
+      canvas.height = video.videoHeight || 480;
+
+      const result = handLandmarker.detectForVideo(video, now);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (result.landmarks && result.landmarks.length > 0) {
+        noHandFrames = 0;
+        result.landmarks.forEach(lms => drawHand(lms));
+        badge.textContent = result.landmarks.length === 2
+          ? '✋ 2 Hands Detected'
+          : '✋ Hand Detected';
+        badge.className = 'badge-detected';
+      } else {
+        noHandFrames++;
+        if (noHandFrames > NO_HAND_THRESHOLD) {
+          badge.textContent = '🤚 No Hand Detected';
+          badge.className = 'badge-none';
+        }
+      }
+      requestAnimationFrame(detect);
+    }
+    requestAnimationFrame(detect);
+  </script>
+</body>
+</html>
+"""
+
+    import streamlit.components.v1 as components
+    components.html(html_code, height=580, scrolling=False)
 
 
 # ─────────────────────────────────────────────
@@ -1083,148 +2090,208 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Upload section
-    image_file = render_upload_section(t)
+    # ── Tabs: Palm Reading | Live Scanner ──────────────────────────────
+    tab_reading, tab_live = st.tabs([t["tab_reading"], t["tab_live"]])
 
-    if image_file is not None:
-        # Detect if a different file is uploaded and reset the reading state
-        file_identifier = getattr(image_file, "name", "camera") + f"_{getattr(image_file, 'size', 0)}"
-        if st.session_state.get("last_uploaded_file_id") != file_identifier:
-            st.session_state.last_uploaded_file_id = file_identifier
+    # ── Live scanner tab ─────────────────────────────────────────────────
+    with tab_live:
+        render_live_scanner(t)
+
+    # ── Main palm reading tab ─────────────────────────────────────────────
+    with tab_reading:
+
+        # Upload section
+        image_file = render_upload_section(t)
+
+        if image_file is not None:
+            # Detect if a different file is uploaded and reset the reading state
+            file_identifier = getattr(image_file, "name", "camera") + f"_{getattr(image_file, 'size', 0)}"
+            if st.session_state.get("last_uploaded_file_id") != file_identifier:
+                st.session_state.last_uploaded_file_id = file_identifier
+                st.session_state.reading_result = None
+                st.session_state.reading_done = False
+                st.session_state.chat_history = []
+                st.session_state.palm_lines = None  # new image needs fresh line detection
+                # Force reprocess on new file
+                st.session_state.pop("_clean_img_bytes", None)
+
+            # Retrieve or compute a clean image (bytes + PIL object)
+            clean_bytes = st.session_state.get("_clean_img_bytes")
+            if clean_bytes is not None:
+                # Reuse the already-processed image from a prior run
+                image = Image.open(io.BytesIO(clean_bytes))
+            else:
+                with st.spinner(""):
+                    try:
+                        raw_bytes = image_file.getvalue()
+                        pil_img = Image.open(io.BytesIO(raw_bytes))
+                        pil_img = pil_img.copy()
+                        pil_img.load()
+                        if pil_img.mode != "RGB":
+                            pil_img = pil_img.convert("RGB")
+                        pil_img.info.clear()
+
+                        # Crop to hand region and remove background
+                        pil_img = crop_hand_image(pil_img)
+
+                        clean_buf = io.BytesIO()
+                        pil_img.save(clean_buf, format="PNG")
+                        png_bytes = clean_buf.getvalue()
+
+                        # Cache for subsequent reruns — avoids re-processing
+                        # the same upload on every interaction
+                        st.session_state["_clean_img_bytes"] = png_bytes
+                        image = Image.open(io.BytesIO(png_bytes))
+                    except UnicodeError as e:
+                        import traceback
+                        logger.error("UnicodeError during image decode/save:\n%s", traceback.format_exc())
+                        if st.session_state.app_lang == "hi":
+                            st.error("❌ छवि लोड करने में त्रुटि: तस्वीर के मेटाडेटा में असमर्थित वर्ण हैं। कृपया सुनिश्चित करें कि यह एक मान्य छवि फ़ाइल (PNG, JPG, WEBP) है।")
+                        else:
+                            st.error("❌ Error loading image: the image metadata contains unsupported characters. Please make sure it is a valid image file (PNG, JPG, WEBP).")
+                        return
+                    except Exception as e:
+                        import traceback
+                        logger.error("Image load failed:\n%s", traceback.format_exc())
+                        if st.session_state.app_lang == "hi":
+                            st.error(f"❌ छवि लोड करने में त्रुटि: {e}। कृपया सुनिश्चित करें कि यह एक मान्य छवि फ़ाइल (PNG, JPG, WEBP) है।")
+                        else:
+                            st.error(f"❌ Error loading image: {e}. Please make sure it is a valid image file (PNG, JPG, WEBP).")
+                        return
+
+            # Display palm + scanning animation
+            try:
+                render_palm_display(image, t)
+                if not st.session_state.reading_done and st.session_state.palm_lines is not None:
+                    render_palm_scanning_animation(image, t, palm_lines=st.session_state.palm_lines)
+            except UnicodeError as e:
+                import traceback
+                logger.error("UnicodeError during display/scan render:\n%s", traceback.format_exc())
+                if st.session_state.app_lang == "hi":
+                    st.error("❌ छवि प्रदर्शित करने में त्रुटि: तस्वीर के मेटाडेटा में असमर्थित वर्ण हैं।")
+                else:
+                    st.error("❌ Error displaying image: the image metadata contains unsupported characters.")
+                return
+
+            # Read Palm button
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                category_key = st.session_state.selected_category
+                tradition_key = st.session_state.selected_tradition
+
+                category_map = READING_CATEGORIES_HI if st.session_state.app_lang == "hi" else READING_CATEGORIES_EN
+                tradition_map = TRADITIONS_HI if st.session_state.app_lang == "hi" else TRADITIONS_EN
+
+                # Handle edge case where keys are missing when language switched
+                if category_key not in category_map:
+                    category_key = list(category_map.keys())[0]
+                if tradition_key not in tradition_map:
+                    tradition_key = list(tradition_map.keys())[3] # default to "all traditions"
+
+                category = category_map[category_key]
+                tradition = tradition_map[tradition_key]
+
+                # If currently loading, display the spinner and call LLM stream
+                if st.session_state.loading:
+                    # Phase 1: detect palm lines (runs once per reading)
+                    if st.session_state.palm_lines is None:
+                        with st.spinner(t.get("detecting_lines", "🔍 Detecting palm lines...")):
+                            st.session_state.palm_lines = detect_palm_lines(client, image, t)
+                        st.rerun()
+
+                    # Phase 2: stream the full reading
+                    try:
+                        # Clear previous state
+                        st.session_state.reading_result = None
+                        st.session_state.reading_done = False
+
+                        # Show a modern loading spinner and stream the analysis
+                        with st.spinner(t["spinner_reading"]):
+                            stream = analyze_palm_stream(client, image, category, tradition, st.session_state.app_lang)
+                            reading = st.write_stream(stream)
+
+                        st.session_state.reading_result = reading
+                        st.session_state.reading_done = True
+                        st.session_state.chat_history = []  # Reset chat for new reading
+                    except Exception as e:
+                        st.error(t["error_reading"].format(error=str(e)))
+                    finally:
+                        st.session_state.loading = False
+                        st.rerun()
+
+                button_label = t["read_button"].format(category=category_key)
+                if st.button(button_label, width="stretch", disabled=st.session_state.loading):
+                    st.session_state.loading = True
+                    st.rerun()
+
+            # Display reading if available
+            if st.session_state.reading_done and st.session_state.reading_result:
+                render_reading_result(st.session_state.reading_result)
+
+                # Action buttons row
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    if st.button(t["new_reading"], width="stretch"):
+                        st.session_state.reading_result = None
+                        st.session_state.reading_done = False
+                        st.session_state.chat_history = []
+                        st.rerun()
+                with col_b:
+                    st.download_button(
+                        t["download_reading"],
+                        data=st.session_state.reading_result,
+                        file_name="hasthrekha_reading.md",
+                        mime="text/markdown",
+                        width="stretch",
+                    )
+                with col_c:
+                    if st.button(t["copy_reading"], width="stretch"):
+                        st.toast(t["copy_toast"], icon="✅")
+
+                # Follow-up chat
+                render_chat_section(client, image, st.session_state.reading_result, t)
+
+        else:
+            # No image — show features and reset reading state
+            st.session_state.last_uploaded_file_id = None
             st.session_state.reading_result = None
             st.session_state.reading_done = False
             st.session_state.chat_history = []
 
-        try:
-            # Load image
-            image = Image.open(image_file)
-            
-            # Apply EXIF transpose to ensure correct orientation (prevent sideways images)
-            from PIL import ImageOps
-            image = ImageOps.exif_transpose(image)
-            
-            st.session_state.palm_image = image
+            st.markdown('<div class="mystic-divider">✦ ✦ ✦</div>', unsafe_allow_html=True)
 
-            # Display palm
-            render_palm_display(image, t)
-        except Exception as e:
-            if st.session_state.app_lang == "hi":
-                st.error(f"❌ छवि लोड करने में त्रुटि: {str(e)}। कृपया सुनिश्चित करें कि यह एक मान्य छवि फ़ाइल (PNG, JPG, WEBP) है।")
-            else:
-                st.error(f"❌ Error loading image: {str(e)}. Please make sure it is a valid image file (PNG, JPG, WEBP).")
-            return
-
-        # Read Palm button
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            category_key = st.session_state.selected_category
-            tradition_key = st.session_state.selected_tradition
-            
-            category_map = READING_CATEGORIES_HI if st.session_state.app_lang == "hi" else READING_CATEGORIES_EN
-            tradition_map = TRADITIONS_HI if st.session_state.app_lang == "hi" else TRADITIONS_EN
-
-            # Handle edge case where keys are missing when language switched
-            if category_key not in category_map:
-                category_key = list(category_map.keys())[0]
-            if tradition_key not in tradition_map:
-                tradition_key = list(tradition_map.keys())[3] # default to "all traditions"
-
-            category = category_map[category_key]
-            tradition = tradition_map[tradition_key]
-
-            button_label = t["read_button"].format(category=category_key)
-            if st.button(button_label, width="stretch"):
-                try:
-                    # Clear previous state
-                    st.session_state.reading_result = None
-                    st.session_state.reading_done = False
-                    
-                    # Show a subtle notice while streaming starts
-                    status_placeholder = st.empty()
-                    status_placeholder.markdown(f"*{t['spinner_reading']}*")
-                    
-                    # Call streaming function
-                    stream = analyze_palm_stream(client, image, category, tradition, st.session_state.app_lang)
-                    
-                    # Clear spinner notice and stream the text
-                    status_placeholder.empty()
-                    reading = st.write_stream(stream)
-                    
-                    st.session_state.reading_result = reading
-                    st.session_state.reading_done = True
-                    st.session_state.chat_history = []  # Reset chat for new reading
-                    st.rerun()
-                except Exception as e:
-                    st.error(t["error_reading"].format(error=str(e)))
-                    return
-
-        # Display reading if available
-        if st.session_state.reading_done and st.session_state.reading_result:
-            render_reading_result(st.session_state.reading_result)
-
-            # Action buttons row
-            col_a, col_b, col_c = st.columns(3)
-            with col_a:
-                if st.button(t["new_reading"], width="stretch"):
-                    st.session_state.reading_result = None
-                    st.session_state.reading_done = False
-                    st.session_state.chat_history = []
-                    st.rerun()
-            with col_b:
-                st.download_button(
-                    t["download_reading"],
-                    data=st.session_state.reading_result,
-                    file_name="hasthrekha_reading.md",
-                    mime="text/markdown",
-                    width="stretch",
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown(
+                    f"""
+                    <div class="glass-card">
+                        <h3>{t["ai_vision_title"]}</h3>
+                        <p style="color:#8b8ba3;">{t["ai_vision_desc"]}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
-            with col_c:
-                if st.button(t["copy_reading"], width="stretch"):
-                    st.toast(t["copy_toast"], icon="✅")
+            with col2:
+                st.markdown(
+                    f"""
+                    <div class="glass-card">
+                        <h3>{t["traditions_title"]}</h3>
+                        <p style="color:#8b8ba3;">{t["traditions_desc"]}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with col3:
+                st.markdown(
+                    f"""
+                    <div class="glass-card">
+                        <h3>{t["chat_feature_title"]}</h3>
+                        <p style="color:#8b8ba3;">{t["chat_feature_desc"]}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-            # Follow-up chat
-            render_chat_section(client, image, st.session_state.reading_result, t)
-
-    else:
-        # No image — show features and reset reading state
-        st.session_state.last_uploaded_file_id = None
-        st.session_state.reading_result = None
-        st.session_state.reading_done = False
-        st.session_state.chat_history = []
-
-        st.markdown('<div class="mystic-divider">✦ ✦ ✦</div>', unsafe_allow_html=True)
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(
-                f"""
-                <div class="glass-card">
-                    <h3>{t["ai_vision_title"]}</h3>
-                    <p style="color:#8b8ba3;">{t["ai_vision_desc"]}</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with col2:
-            st.markdown(
-                f"""
-                <div class="glass-card">
-                    <h3>{t["traditions_title"]}</h3>
-                    <p style="color:#8b8ba3;">{t["traditions_desc"]}</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with col3:
-            st.markdown(
-                f"""
-                <div class="glass-card">
-                    <h3>{t["chat_feature_title"]}</h3>
-                    <p style="color:#8b8ba3;">{t["chat_feature_desc"]}</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
 
     # Footer disclaimer
     st.markdown(

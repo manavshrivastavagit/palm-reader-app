@@ -1,7 +1,14 @@
 import unittest
 import os
 import streamlit as st
-from app import build_reading_prompt, get_system_prompt, get_followup_system_prompt, get_gemini_client
+from app import (
+    build_reading_prompt, 
+    get_system_prompt, 
+    get_followup_system_prompt, 
+    get_gemini_client,
+    get_custom_css,
+    init_session_state
+)
 
 class TestHasthrekhaApp(unittest.TestCase):
     
@@ -65,6 +72,29 @@ class TestHasthrekhaApp(unittest.TestCase):
                 os.environ["GEMINI_API_KEY"] = old_env_key
             if old_session_key is not None:
                 st.session_state["api_key"] = old_session_key
+
+    def test_get_custom_css(self):
+        """Test get_custom_css returns valid CSS configurations and styling tags."""
+        css = get_custom_css()
+        self.assertTrue(css.strip().startswith("<style>"))
+        self.assertTrue(css.strip().endswith("</style>"))
+        self.assertIn("stApp", css)
+        self.assertIn("stChatMessage", css)
+        self.assertIn("stChatInput", css)
+
+    def test_init_session_state(self):
+        """Test that init_session_state sets default variables correctly."""
+        # Ensure clean state for variables we test
+        test_keys = ["loading", "last_uploaded_file_id", "reading_done", "chat_history"]
+        for key in test_keys:
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        init_session_state()
+        self.assertFalse(st.session_state.loading)
+        self.assertIsNone(st.session_state.last_uploaded_file_id)
+        self.assertFalse(st.session_state.reading_done)
+        self.assertEqual(st.session_state.chat_history, [])
 
 if __name__ == "__main__":
     unittest.main()
