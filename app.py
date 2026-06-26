@@ -1767,17 +1767,18 @@ def render_palm_scanning_animation(image: Image.Image, t, palm_lines=None):
 </body>
 </html>
 """
-    import streamlit.components.v1 as components
     st.markdown(
         f'<p style="text-align:center;color:#a78bfa;font-weight:600;font-size:0.88rem;'
         f'letter-spacing:1px;text-transform:uppercase;margin:8px 0 2px;">{scan_heading}</p>',
         unsafe_allow_html=True
     )
+    import base64 as _b64
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         # Sanitise against surrogates that crash protobuf serialization
         safe = html.encode("utf-8", errors="replace").decode("utf-8")
-        components.html(safe, height=500, scrolling=False)
+        _encoded = _b64.b64encode(safe.encode("utf-8")).decode("utf-8")
+        st.iframe(f"data:text/html;base64,{_encoded}", height=500)
 
 
 def render_reading_result(reading: str):
@@ -2044,8 +2045,9 @@ def render_live_scanner(t):
 </html>
 """
 
-    import streamlit.components.v1 as components
-    components.html(html_code, height=580, scrolling=False)
+    import base64 as _b64
+    _encoded = _b64.b64encode(html_code.encode("utf-8")).decode("utf-8")
+    st.iframe(f"data:text/html;base64,{_encoded}", height=580)
 
 
 # ─────────────────────────────────────────────
