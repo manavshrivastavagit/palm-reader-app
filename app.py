@@ -896,15 +896,73 @@ def _center_crop_fallback(image: Image.Image) -> Image.Image:
     return Image.blend(fallback, bg, 0.15)
 
 
-def crop_hand_image(image: Image.Image) -> Image.Image:
-    """Detect hand using MediaPipe (no OpenCV), crop tightly, and composite
-    onto dark background.  Falls back to center-crop or original."""
+def _detect_hand_landmarks(img_array):
+    """Try multiple MediaPipe APIs to detect hand landmarks.
+    Returns list of (x,y) pixel tuples or None."""
+    h, w = img_array.shape[:2]
+    import os as _os
+
+    # ── Approach 1: mp.solutions (mediapipe < 0.10.10) ────────────
     try:
         import mediapipe as mp
-        import numpy as np
-    except (ImportError, OSError) as e:
-        logger.warning("MediaPipe unavailable (%s) — skipping hand crop", e)
-        return _center_crop_fallback(image)
+        if hasattr(mp, "solutions"):
+            hands = mp.solutions.hands.Hands(
+                static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5,
+            )
+            result = hands.process(img_array[:, :, ::-1].copy())
+            hands.close()
+            if result.multi_hand_landmarks:
+                logger.info("Hand detected via mp.solutions")
+                return [
+                    (int(lm.x * w), int(lm.y * h))
+                    for lm in result.multi_hand_landmarks[0].landmark
+                ]
+    except Exception as e:
+        logger.debug("mp.solutions approach failed: %s", e)
+
+    # ── Approach 2: mp.tasks.vision (mediapipe >= 0.10.10) ─────────
+    try:
+        from mediapipe.tasks import python as _mp_tasks
+        from mediapipe.tasks.python import vision as _mp_vision
+        import mediapipe as _mp2
+
+        model_path = "/tmp/hand_landmarker.task"
+        if not _os.path.exists(model_path):
+            import urllib.request as _urllib
+            _url = (
+                "https://storage.googleapis.com/mediapipe-models/"
+                "hand_landmarker/hand_landmarker/float16/latest/"
+                "hand_landmarker.task"
+            )
+            _urllib.urlretrieve(_url, model_path)
+
+        _opts = _mp_vision.HandLandmarkerOptions(
+            base_options=_mp_tasks.BaseOptions(model_asset_path=model_path),
+            running_mode=_mp_vision.RunningMode.IMAGE,
+            num_hands=1,
+            min_hand_detection_confidence=0.5,
+        )
+        _detector = _mp_vision.HandLandmarker.create_from_options(_opts)
+        _mp_img = _mp2.Image(image_format=_mp2.ImageFormat.SRGB, data=img_array)
+        _result = _detector.detect(_mp_img)
+        _detector.close()
+
+        if _result.hand_landmarks:
+            logger.info("Hand detected via mp.tasks")
+            return [
+                (int(lm.x * w), int(lm.y * h))
+                for lm in _result.hand_landmarks[0]
+            ]
+    except Exception as e:
+        logger.debug("mp.tasks approach failed: %s", e)
+
+    return None
+
+
+def crop_hand_image(image: Image.Image) -> Image.Image:
+    """Detect hand using MediaPipe, crop tightly, and composite onto
+    dark background.  Falls back to center-crop or original."""
+    import numpy as np
 
     if image.mode != "RGB":
         img = image.convert("RGB")
@@ -915,26 +973,12 @@ def crop_hand_image(image: Image.Image) -> Image.Image:
     if w < 64 or h < 64:
         return image
 
-    try:
-        hands = mp.solutions.hands.Hands(
-            static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5,
-        )
-        # RGB→BGR via numpy slicing — no OpenCV needed
-        results = hands.process(img_array[:, :, ::-1].copy())
-        hands.close()
-
-        if results.multi_hand_landmarks:
-            pts = [
-                (int(lm.x * w), int(lm.y * h))
-                for lm in results.multi_hand_landmarks[0].landmark
-            ]
-            xs = [p[0] for p in pts]
-            ys = [p[1] for p in pts]
-        else:
-            return _center_crop_fallback(image)
-    except Exception as e:
-        logger.warning("MediaPipe hand detection failed: %s", e)
+    pts = _detect_hand_landmarks(img_array)
+    if pts is None:
         return _center_crop_fallback(image)
+
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
 
     # ── Bounding box ───────────────────────────────────────────────────
     pad_x = int(w * 0.08)
