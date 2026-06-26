@@ -802,16 +802,22 @@ def analyze_palm_stream(client: genai.Client, image: Image.Image, category: str,
     logger.info(f"Starting palm analysis (category={category}, tradition={tradition}, lang={lang})")
     prompt = build_reading_prompt(category, tradition, lang)
 
-    # Upload image to GenAI File API for reliable model access
-    _buf = io.BytesIO()
-    image.save(_buf, format="PNG")
-    _buf.seek(0)
-    uploaded_file = client.files.upload(file=_buf)
+    # Ensure image is fully loaded RGB
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image.load()
 
+    # ── Approach 1: Upload via GenAI File API ────────────────────────
     try:
+        _buf = io.BytesIO()
+        image.save(_buf, format="JPEG")
+        _buf.seek(0)
+        _file = client.files.upload(file=_buf)
+        logger.info("Image uploaded via File API: %s", _file.name)
+
         response_stream = client.models.generate_content_stream(
             model="gemini-2.5-flash",
-            contents=[prompt, uploaded_file],
+            contents=[prompt, _file],
             config=genai.types.GenerateContentConfig(
                 system_instruction=get_system_prompt(lang),
                 temperature=0.8,
@@ -821,10 +827,36 @@ def analyze_palm_stream(client: genai.Client, image: Image.Image, category: str,
         for chunk in response_stream:
             if chunk.text:
                 yield chunk.text
-        # Clean up uploaded file after streaming completes
-        client.files.delete(name=uploaded_file.name)
+        client.files.delete(name=_file.name)
+        return
     except Exception as e:
-        logger.error(f"Error during palm analysis: {str(e)}", exc_info=True)
+        logger.warning("File API approach failed: %s — trying Part.from_bytes", e)
+        try:
+            client.files.delete(name=_file.name)
+        except Exception:
+            pass
+
+    # ── Approach 2: Part.from_bytes with JPEG ────────────────────────
+    try:
+        _buf = io.BytesIO()
+        image.save(_buf, format="JPEG")
+        _part = genai.types.Part.from_bytes(data=_buf.getvalue(), mime_type="image/jpeg")
+
+        response_stream = client.models.generate_content_stream(
+            model="gemini-2.5-flash",
+            contents=[prompt, _part],
+            config=genai.types.GenerateContentConfig(
+                system_instruction=get_system_prompt(lang),
+                temperature=0.8,
+                max_output_tokens=4096,
+            ),
+        )
+        for chunk in response_stream:
+            if chunk.text:
+                yield chunk.text
+        return
+    except Exception as e:
+        logger.error("Both File API and Part.from_bytes failed: %s", e, exc_info=True)
         if lang == "hi":
             yield f"\n\n❌ **त्रुटि**: विश्लेषण करने में विफल। ({str(e)})"
         else:
@@ -835,14 +867,32 @@ def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str,
     """Handle follow-up questions about the reading using streaming and native chat history format."""
     logger.info(f"Starting chat follow-up (history_len={len(history)}, lang={lang})")
 
-    # Upload image to GenAI File API for reliable model access
-    _buf = io.BytesIO()
-    image.save(_buf, format="PNG")
-    _buf.seek(0)
-    _uploaded = client.files.upload(file=_buf)
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image.load()
+
+    # ── Upload image (try File API first, then Part.from_bytes) ─────
+    _img_part = None
+    _uploaded_file = None
+    try:
+        _buf = io.BytesIO()
+        image.save(_buf, format="JPEG")
+        _buf.seek(0)
+        _uploaded_file = client.files.upload(file=_buf)
+        _img_part = _uploaded_file
+        logger.info("Chat: image uploaded via File API")
+    except Exception as e:
+        logger.warning("Chat File API failed: %s", e)
+        try:
+            client.files.delete(name=_uploaded_file.name)
+        except Exception:
+            pass
+        _buf2 = io.BytesIO()
+        image.save(_buf2, format="JPEG")
+        _img_part = genai.types.Part.from_bytes(data=_buf2.getvalue(), mime_type="image/jpeg")
 
     # 1. Initial reading context: flat list — SDK auto-wraps text+image in Content(role="user")
-    contents = [f"Initial Palm Reading Context:\n\n{reading}", _uploaded]
+    contents = [f"Initial Palm Reading Context:\n\n{reading}", _img_part]
 
     # 2. Add validation acknowledgement by the model to lock the turn
     contents.append(genai.types.Content(
@@ -881,18 +931,18 @@ def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str,
         for chunk in response_stream:
             if chunk.text:
                 yield chunk.text
-        # Clean up after streaming completes
-        client.files.delete(name=_uploaded.name)
     except Exception as e:
         logger.error(f"Error during chat follow-up: {str(e)}", exc_info=True)
         if lang == "hi":
             yield f"\n\n❌ **त्रुटि**: प्रतिक्रिया उत्पन्न करने में विफल। ({str(e)})"
         else:
             yield f"\n\n❌ **Error**: Failed to generate response. ({str(e)})"
-        try:
-            client.files.delete(name=_uploaded.name)
-        except Exception:
-            pass
+    finally:
+        if _uploaded_file is not None:
+            try:
+                client.files.delete(name=_uploaded_file.name)
+            except Exception:
+                pass
 
 
 # ─────────────────────────────────────────────
@@ -935,8 +985,8 @@ def _detect_hand_bbox(img_array):
         Cr = (R - Y) * 0.713 + 128
         Cb = (B - Y) * 0.564 + 128
 
-        # Classic skin range in YCrCb
-        skin = (Cr >= 133) & (Cr <= 173) & (Cb >= 77) & (Cb <= 127)
+        # Classic skin range in YCrCb — widened for camera/webcam lighting
+        skin = (Cr >= 125) & (Cr <= 180) & (Cb >= 70) & (Cb <= 135)
 
         ys, xs = np.where(skin)
         if len(ys) >= 200:  # enough skin pixels → hand found
@@ -1049,7 +1099,7 @@ def crop_hand_image(image: Image.Image) -> Image.Image:
     Y  = 0.299 * R + 0.587 * G + 0.114 * B
     Cr = (R - Y) * 0.713 + 128
     Cb = (B - Y) * 0.564 + 128
-    skin = (Cr >= 133) & (Cr <= 173) & (Cb >= 77) & (Cb <= 127)
+    skin = (Cr >= 125) & (Cr <= 180) & (Cb >= 70) & (Cb <= 135)
 
     mask = Image.new("L", (w, h), 0)
     mask_np = np.array(mask, dtype=np.uint8)
@@ -1097,21 +1147,26 @@ def detect_palm_lines(client: genai.Client, image: Image.Image, t: dict) -> dict
         '"life":[[x1,y1],[x2,y2],[x3,y3],[x4,y4],[x5,y5]]}'
     )
 
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image.load()
+
+    # ── Approach 1: File API ─────────────────────────────────────────────
     try:
         _buf = io.BytesIO()
-        image.save(_buf, format="PNG")
+        image.save(_buf, format="JPEG")
         _buf.seek(0)
-        uploaded_file = client.files.upload(file=_buf)
+        _file = client.files.upload(file=_buf)
 
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=[prompt, uploaded_file],
+            contents=[prompt, _file],
             config=genai.types.GenerateContentConfig(
                 temperature=0.2,
                 max_output_tokens=1024,
             ),
         )
-        client.files.delete(name=uploaded_file.name)
+        client.files.delete(name=_file.name)
         text = response.text.strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
@@ -1119,8 +1174,33 @@ def detect_palm_lines(client: genai.Client, image: Image.Image, t: dict) -> dict
             text = text.split("```")[1].split("```")[0].strip()
         lines = json.loads(text)
     except Exception as e:
-        logger.warning("Gemini line detection failed: %s", e)
-        return {}
+        logger.warning("File API approach failed for line detection: %s", e)
+        try:
+            client.files.delete(name=_file.name)
+        except Exception:
+            pass
+        # ── Approach 2: Part.from_bytes ────────────────────────────────
+        try:
+            _buf2 = io.BytesIO()
+            image.save(_buf2, format="JPEG")
+            _part = genai.types.Part.from_bytes(data=_buf2.getvalue(), mime_type="image/jpeg")
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt, _part],
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=1024,
+                ),
+            )
+            text = response.text.strip()
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+            lines = json.loads(text)
+        except Exception as e2:
+            logger.warning("Part.from_bytes also failed for line detection: %s", e2)
+            return {}
 
     # Validate — each must have 4+ points
     for key in ("heart", "head", "life"):
@@ -2192,8 +2272,8 @@ def main():
             # Retrieve or compute a clean image (bytes + PIL object)
             clean_bytes = st.session_state.get("_clean_img_bytes")
             if clean_bytes is not None:
-                # Reuse the already-processed image from a prior run
                 image = Image.open(io.BytesIO(clean_bytes))
+                image.load()
             else:
                 with st.spinner(""):
                     try:
