@@ -64,7 +64,7 @@ TRADITIONS_EN = {
 
 TRANSLATIONS = {
     "hi": {
-        "app_title": "🔮 हस्तरेखा (Hasthrekha)",
+        "app_title": "🔮🖐️ हस्तरेखा (Hasthrekha)",
         "app_subtitle": "एआई-संचालित हस्तरेखा शास्त्र — प्राचीन ज्ञान और आधुनिक तकनीक का मिलन",
         "settings": "⚙️ सेटिंग्स",
         "lang_label": "🌐 ऐप की भाषा (App Language)",
@@ -114,13 +114,14 @@ TRANSLATIONS = {
         "traditions_desc": "वैदिक, पश्चिमी और चीनी हस्तरेखा शास्त्र पर आधारित विश्लेषण प्राप्त करें — या तीनों को मिलाकर देखें।",
         "chat_feature_title": "💬 प्रश्न पूछें",
         "chat_feature_desc": "अपने विश्लेषण के बारे में हस्तरेखा शास्त्री से चैट करें। प्यार, करियर, स्वास्थ्य या किसी भी रेखा के बारे में पूछें।",
-        "portfolio_title": "👤 आर्किटेक्ट पोर्टफोलियो",
+        "portfolio_title": "👤 मानव श्रीवास्तव — एआई सॉल्यूशन आर्किटेक्ट",
         "github_label": "💻 गिटहब रिपोजिटरी",
         "linkedin_label": "🔗 लिंक्डइन प्रोफाइल",
+        "app_intro": "हस्तरेखा शास्त्र (हस्तरेखा) हथेली के आकार, रेखाओं, पर्वतों और निशानों के अध्ययन के माध्यम से किसी व्यक्ति के चरित्र, ऊर्जा, क्षमता और जीवन पथ को समझने की एक प्राचीन कला और विज्ञान है। सदियों से विविध संस्कृतियों में उपयोग की जाने वाली यह पद्धति आत्म-चिंतन, अपनी क्षमता को समझने और जीवन मार्गदर्शन प्राप्त करने के लिए एक दर्पण का कार्य करती है।",
         "footer_disclaimer": "⚠️ हस्तरेखा केवल मनोरंजन और आत्म-चिंतन के उद्देश्य से है। यह चिकित्सा, वित्तीय या व्यावसायिक सलाह प्रदान नहीं करती है।\n\nआपकी हथेली की तस्वीरें एआई द्वारा प्रोसेस की जाती हैं और इन्हें कहीं भी स्टोर नहीं किया जाता है।"
     },
     "en": {
-        "app_title": "🔮 Hasthrekha",
+        "app_title": "🔮🖐️ Hasthrekha",
         "app_subtitle": "AI-Powered Palm Reading — Ancient Wisdom Meets Modern Intelligence",
         "settings": "⚙️ Settings",
         "lang_label": "🌐 App Language",
@@ -170,9 +171,10 @@ TRANSLATIONS = {
         "traditions_desc": "Get readings grounded in Vedic, Western, and Chinese palmistry — or all three combined.",
         "chat_feature_title": "💬 Ask Follow-ups",
         "chat_feature_desc": "Chat with PalmGuide about your reading. Ask about love, career, health, or any specific line.",
-        "portfolio_title": "👤 Architect Portfolio",
+        "portfolio_title": "👤 Manav Shrivastava — AI Solution Architect",
         "github_label": "💻 GitHub Repository",
         "linkedin_label": "🔗 LinkedIn Profile",
+        "app_intro": "Palmistry (Hasthrekha) is the ancient art and science of reading the character, vitality, traits, and life path of an individual through the study of the shape, lines, mounts, and markings of the palm. Used across diverse cultures for centuries, it serves as a powerful mirror for self-reflection, understanding potential, and seeking guidance.",
         "footer_disclaimer": "⚠️ Hasthrekha is for entertainment and self-reflection purposes only. It does not provide medical, financial, or professional advice.\n\nYour palm images are processed by AI and are not permanently stored."
     }
 }
@@ -465,48 +467,70 @@ Provide a rich personality profile — strengths, challenges, communication styl
 # Custom CSS
 # ─────────────────────────────────────────────
 
-CUSTOM_CSS = """
+def get_custom_css() -> str:
+    """Load background image, base64 encode it, and return custom CSS."""
+    bg_image_path = "docs/cosmic_palm_bg.png"
+    if os.path.exists(bg_image_path):
+        import base64
+        try:
+            with open(bg_image_path, "rb") as f:
+                bg_base64 = base64.b64encode(f.read()).decode("utf-8")
+            bg_rule = f"background: radial-gradient(circle at 50% 10%, rgba(28, 10, 53, 0.7) 0%, rgba(10, 10, 26, 0.95) 80%), url('data:image/png;base64,{bg_base64}'); background-size: cover; background-position: center; background-attachment: fixed; background-blend-mode: multiply;"
+        except Exception as e:
+            logger.error(f"Error loading background image base64: {str(e)}")
+            bg_rule = "background: radial-gradient(circle at 50% 10%, #1c0a35 0%, #0a0a1a 70%); background-attachment: fixed;"
+    else:
+        bg_rule = "background: radial-gradient(circle at 50% 10%, #1c0a35 0%, #0a0a1a 70%); background-attachment: fixed;"
+
+    return f"""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght=300;400;500;600;700;800&family=Playfair+Display:ital,wght=0,400..900;1,400..900&display=swap');
 
     /* Global typography */
-    html, body, [class*="css"], .stApp {
+    html, body, [class*="css"], .stApp {{
         font-family: 'Outfit', -apple-system, sans-serif !important;
-    }
+    }}
 
     /* Ensure clear text readability on dark background */
-    .stApp p, .stApp span, .stApp li, .stApp label, .stApp h1, .stApp h2, .stApp h3 {
+    .stApp p, .stApp span, .stApp li, .stApp label, .stApp h1, .stApp h2, .stApp h3 {{
         color: #f0f0f5;
-    }
+    }}
+
+    /* Force black text for the browse files upload button and download reading button */
+    [data-testid="stFileUploader"] button,
+    [data-testid="stFileUploader"] button *,
+    [data-testid="stDownloadButton"] button,
+    [data-testid="stDownloadButton"] button * {{
+        color: #121214 !important;
+    }}
 
     /* Main background with cosmic nebula effect */
-    .stApp {
-        background: radial-gradient(circle at 50% 10%, #1c0a35 0%, #0a0a1a 70%);
-        background-attachment: fixed;
-    }
+    .stApp {{
+        {bg_rule}
+    }}
 
     /* Custom Scrollbar for a premium feel */
-    ::-webkit-scrollbar {
+    ::-webkit-scrollbar {{
         width: 8px;
         height: 8px;
-    }
-    ::-webkit-scrollbar-track {
+    }}
+    ::-webkit-scrollbar-track {{
         background: #0a0a1a;
-    }
-    ::-webkit-scrollbar-thumb {
+    }}
+    ::-webkit-scrollbar-thumb {{
         background: #4c1d95;
         border-radius: 4px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
+    }}
+    ::-webkit-scrollbar-thumb:hover {{
         background: #6d28d9;
-    }
+    }}
 
     /* Header styling with pulsing glowing text */
-    .main-header {
+    .main-header {{
         text-align: center;
         padding: 2.5rem 0 1.5rem;
-    }
-    .main-header h1 {
+    }}
+    .main-header h1 {{
         font-family: 'Playfair Display', Georgia, serif !important;
         background: linear-gradient(135deg, #ffe082 0%, #ffb300 40%, #e040fb 70%, #00e5ff 100%);
         -webkit-background-clip: text;
@@ -517,25 +541,25 @@ CUSTOM_CSS = """
         margin-bottom: 0.4rem;
         filter: drop-shadow(0 2px 8px rgba(255, 224, 130, 0.15));
         animation: titleGlow 4s ease-in-out infinite alternate;
-    }
-    @keyframes titleGlow {
-        from {
+    }}
+    @keyframes titleGlow {{
+        from {{
             filter: drop-shadow(0 2px 8px rgba(255, 224, 130, 0.15));
-        }
-        to {
+        }}
+        to {{
             filter: drop-shadow(0 4px 20px rgba(224, 64, 251, 0.35));
-        }
-    }
-    .main-header p {
+        }}
+    }}
+    .main-header p {{
         color: #a78bfa;
         font-size: 1.15rem;
         font-style: italic;
         font-weight: 300;
         letter-spacing: 0.5px;
-    }
+    }}
 
     /* Premium Glassmorphism Cards */
-    .glass-card {
+    .glass-card {{
         background: rgba(255, 255, 255, 0.025);
         border: 1px solid rgba(255, 255, 255, 0.05);
         border-radius: 16px;
@@ -544,22 +568,22 @@ CUSTOM_CSS = """
         backdrop-filter: blur(16px) saturate(180%);
         box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
         transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    .glass-card:hover {
+    }}
+    .glass-card:hover {{
         transform: translateY(-4px);
         background: rgba(255, 255, 255, 0.04);
         border-color: rgba(167, 139, 250, 0.25);
         box-shadow: 0 12px 40px 0 rgba(124, 58, 237, 0.18);
-    }
-    .glass-card h3 {
+    }}
+    .glass-card h3 {{
         font-family: 'Playfair Display', Georgia, serif !important;
         font-size: 1.4rem;
         color: #ffb300;
         margin-bottom: 0.6rem;
-    }
+    }}
 
     /* File upload design */
-    .upload-section {
+    .upload-section {{
         background: rgba(124, 58, 237, 0.03);
         border: 2px dashed rgba(167, 139, 250, 0.2);
         border-radius: 20px;
@@ -567,25 +591,25 @@ CUSTOM_CSS = """
         text-align: center;
         transition: all 0.3s ease;
         box-shadow: inset 0 0 20px rgba(124, 58, 237, 0.05);
-    }
-    .upload-section:hover {
+    }}
+    .upload-section:hover {{
         border-color: rgba(167, 139, 250, 0.5);
         background: rgba(124, 58, 237, 0.06);
         box-shadow: inset 0 0 25px rgba(124, 58, 237, 0.08);
-    }
+    }}
 
     /* Reading result container */
-    .reading-container {
-        background: rgba(10, 10, 26, 0.4);
-        border: 1px solid rgba(167, 139, 250, 0.15);
+    .reading-container {{
+        background: rgba(10, 10, 26, 0.5);
+        border: 1px solid rgba(167, 139, 250, 0.2);
         border-radius: 24px;
         padding: 2.5rem;
         margin-top: 2rem;
         line-height: 1.85;
-        backdrop-filter: blur(16px);
-        box-shadow: 0 15px 45px rgba(0, 0, 0, 0.4), inset 0 0 15px rgba(167, 139, 250, 0.05);
-    }
-    .reading-container h2 {
+        backdrop-filter: blur(20px);
+        box-shadow: 0 15px 45px rgba(0, 0, 0, 0.5), inset 0 0 15px rgba(167, 139, 250, 0.05);
+    }}
+    .reading-container h2 {{
         font-family: 'Playfair Display', Georgia, serif !important;
         color: #c4b5fd;
         font-size: 2rem;
@@ -593,32 +617,32 @@ CUSTOM_CSS = """
         margin-bottom: 1rem;
         padding-bottom: 0.5rem;
         border-bottom: 1px solid rgba(167, 139, 250, 0.15);
-    }
-    .reading-container h3 {
+    }}
+    .reading-container h3 {{
         font-family: 'Playfair Display', Georgia, serif !important;
         color: #ffb300;
         font-size: 1.45rem;
         margin-top: 1.5rem;
-    }
+    }}
 
     /* Sidebar customize */
-    section[data-testid="stSidebar"] {
+    section[data-testid="stSidebar"] {{
         background: linear-gradient(180deg, #090915 0%, #150926 100%);
         border-right: 1px solid rgba(255, 255, 255, 0.04);
-    }
-    section[data-testid="stSidebar"] h2 {
+    }}
+    section[data-testid="stSidebar"] h2 {{
         font-family: 'Playfair Display', Georgia, serif !important;
         color: #ffd54f !important;
         font-size: 1.5rem;
-    }
+    }}
     section[data-testid="stSidebar"] .stSelectbox label,
-    section[data-testid="stSidebar"] .stRadio label {
+    section[data-testid="stSidebar"] .stRadio label {{
         color: #c4b5fd !important;
         font-weight: 500;
-    }
+    }}
 
     /* Interactive Buttons */
-    .stButton > button {
+    .stButton > button {{
         background: linear-gradient(135deg, #6d28d9 0%, #a855f7 50%, #4c1d95 100%);
         background-size: 200% auto;
         color: white;
@@ -630,67 +654,67 @@ CUSTOM_CSS = """
         transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
         width: 100%;
         box-shadow: 0 4px 15px rgba(109, 40, 217, 0.2);
-    }
-    .stButton > button:hover {
+    }}
+    .stButton > button:hover {{
         transform: translateY(-2px);
         background-position: right center;
         box-shadow: 0 8px 25px rgba(168, 85, 247, 0.4);
-    }
+    }}
 
     /* Modern Chat Bubble styling */
-    .stChatMessage {
+    .stChatMessage {{
         background: rgba(255, 255, 255, 0.02) !important;
         border: 1px solid rgba(255, 255, 255, 0.04) !important;
         border-radius: 16px !important;
         padding: 1rem !important;
         margin-bottom: 0.8rem !important;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
-    }
+    }}
     /* Chat input focus */
-    .stChatInput > div {
+    .stChatInput > div {{
         border-color: rgba(167, 139, 250, 0.2) !important;
         border-radius: 14px !important;
         background-color: rgba(15, 10, 25, 0.6) !important;
-    }
+    }}
 
     /* Spinner color */
-    .stSpinner > div {
+    .stSpinner > div {{
         border-color: #a855f7 !important;
-    }
+    }}
 
     /* Celestial Divider */
-    .mystic-divider {
+    .mystic-divider {{
         text-align: center;
         margin: 2rem 0;
         color: #ffb300;
         font-size: 1.3rem;
         letter-spacing: 12px;
         opacity: 0.85;
-    }
+    }}
 
     /* Image display styling */
-    .palm-image-container {
+    .palm-image-container {{
         border-radius: 16px;
         overflow: hidden;
         border: 2px solid rgba(167, 139, 250, 0.15);
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-    }
+    }}
 
     /* Hide default elements */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    header {{visibility: hidden;}}
 
     /* Expander styling */
-    .streamlit-expanderHeader {
+    .streamlit-expanderHeader {{
         color: #c4b5fd !important;
         font-weight: 600;
         background: transparent !important;
-    }
-    .streamlit-expanderContent {
+    }}
+    .streamlit-expanderContent {{
         background: rgba(255, 255, 255, 0.01) !important;
         border-radius: 0 0 12px 12px;
-    }
+    }}
 </style>
 """
 
@@ -745,12 +769,17 @@ def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str,
     logger.info(f"Starting chat follow-up (history_len={len(history)}, lang={lang})")
     contents = []
     
+    # Convert PIL Image to bytes for manual Part serialization
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format="PNG")
+    image_bytes = img_byte_arr.getvalue()
+    
     # 1. Add initial reading context as the first user turn
     contents.append(genai.types.Content(
         role="user",
         parts=[
             genai.types.Part.from_text(text=f"Initial Palm Reading Context:\n\n{reading}"),
-            image
+            genai.types.Part.from_bytes(data=image_bytes, mime_type="image/png")
         ]
     ))
     
@@ -1027,7 +1056,7 @@ def main():
     )
 
     # Inject custom CSS
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+    st.markdown(get_custom_css(), unsafe_allow_html=True)
 
     # Render UI
     render_header(t)
@@ -1043,6 +1072,16 @@ def main():
             st.warning("🔑 Please enter your Gemini API key in the sidebar to get started.")
             st.info("Get your free API key at [Google AI Studio](https://aistudio.google.com/apikey)")
         return
+
+    # Render introduction paragraph
+    st.markdown(
+        f"""
+        <div style="text-align:center; max-width:850px; margin:0 auto 2.2rem; color:#b0a8d6; font-size:1.1rem; line-height:1.75; font-style:italic;">
+            {t["app_intro"]}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Upload section
     image_file = render_upload_section(t)
