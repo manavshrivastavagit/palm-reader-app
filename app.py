@@ -114,6 +114,9 @@ TRANSLATIONS = {
         "traditions_desc": "वैदिक, पश्चिमी और चीनी हस्तरेखा शास्त्र पर आधारित विश्लेषण प्राप्त करें — या तीनों को मिलाकर देखें।",
         "chat_feature_title": "💬 प्रश्न पूछें",
         "chat_feature_desc": "अपने विश्लेषण के बारे में हस्तरेखा शास्त्री से चैट करें। प्यार, करियर, स्वास्थ्य या किसी भी रेखा के बारे में पूछें।",
+        "portfolio_title": "👤 आर्किटेक्ट पोर्टफोलियो",
+        "github_label": "💻 गिटहब रिपोजिटरी",
+        "linkedin_label": "🔗 लिंक्डइन प्रोफाइल",
         "footer_disclaimer": "⚠️ हस्तरेखा केवल मनोरंजन और आत्म-चिंतन के उद्देश्य से है। यह चिकित्सा, वित्तीय या व्यावसायिक सलाह प्रदान नहीं करती है।\n\nआपकी हथेली की तस्वीरें एआई द्वारा प्रोसेस की जाती हैं और इन्हें कहीं भी स्टोर नहीं किया जाता है।"
     },
     "en": {
@@ -167,6 +170,9 @@ TRANSLATIONS = {
         "traditions_desc": "Get readings grounded in Vedic, Western, and Chinese palmistry — or all three combined.",
         "chat_feature_title": "💬 Ask Follow-ups",
         "chat_feature_desc": "Chat with PalmGuide about your reading. Ask about love, career, health, or any specific line.",
+        "portfolio_title": "👤 Architect Portfolio",
+        "github_label": "💻 GitHub Repository",
+        "linkedin_label": "🔗 LinkedIn Profile",
         "footer_disclaimer": "⚠️ Hasthrekha is for entertainment and self-reflection purposes only. It does not provide medical, financial, or professional advice.\n\nYour palm images are processed by AI and are not permanently stored."
     }
 }
@@ -907,6 +913,26 @@ def render_sidebar(t):
         # Tips
         with st.expander(t["tips_title"]):
             st.markdown(t["tips_content"])
+
+        st.markdown("---")
+
+        # Portfolio links
+        st.markdown(f"## {t['portfolio_title']}")
+        st.markdown(
+            f"""
+            <a href="https://github.com/manavshrivastavagit/palm-reader-app" target="_blank" style="text-decoration:none;">
+                <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); border-radius:8px; padding:0.6rem; margin-bottom:0.5rem; text-align:center; transition: all 0.3s ease;">
+                    <span style="color:#ffb300 !important; font-weight:600; font-size:0.9rem;">{t['github_label']}</span>
+                </div>
+            </a>
+            <a href="https://www.linkedin.com/in/manav-shrivastava" target="_blank" style="text-decoration:none;">
+                <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); border-radius:8px; padding:0.6rem; text-align:center; transition: all 0.3s ease;">
+                    <span style="color:#a78bfa !important; font-weight:600; font-size:0.9rem;">{t['linkedin_label']}</span>
+                </div>
+            </a>
+            """,
+            unsafe_allow_html=True,
+        )
 
         st.markdown("---")
         st.markdown(
