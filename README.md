@@ -22,14 +22,18 @@ This application functions as a showcase for production-grade LLM orchestration 
 ```mermaid
 graph TD
     User([User]) -->|1. Uploads Palm Image| UI[Streamlit Glassmorphic UI]
-    User -->|2. Configures Language & Tradition| UI
-    UI -->|3. Packages Image + Localized Prompts| Client[Google GenAI Client]
+    User -->|1b. Live Scanner| LS[MediaPipe JS ~ Browser]
+    LS -->|Auto-captures open palm| UI
+    UI -->|2. Crops & cleans hand| Crop[YCrCb Skin Detection + Flood-fill]
+    Crop -->|3. Packages Image + Localized Prompts| Client[Google GenAI Client]
     Client -->|4. Generates Completion Request| Gemini[Gemini 2.5 Flash]
     Gemini -->|5. Streams Structured Markdown| UI
-    User -->|6. Asks Follow-up Question| ChatAgent[Conversational Memory Agent]
-    ChatAgent -->|7. Image + Chat History Context| Gemini
-    Gemini -->|8. Context-Aware Follow-up Response| User
-    Gemini -->|9. Error Catching / Logs| Logger[Standard Logger]
+    UI -->|6. Animates scan line| Scan[Canvas-based Scanning Animation]
+    Scan -->|7. Shows reading| User
+    User -->|8. Asks Follow-up Question| ChatAgent[Conversational Memory Agent]
+    ChatAgent -->|9. Image + Chat History Context| Gemini
+    Gemini -->|10. Context-Aware Follow-up Response| User
+    Gemini -->|11. Error Catching / Logs| Logger[Standard Logger]
 ```
 
 ### 🧠 Core Architectural Modules
@@ -50,6 +54,18 @@ To maximize user experience and minimize perceived latency, the application impl
 
 #### 5. Cached Resource Architecture
 We leverage Streamlit's resource-caching system (`st.cache_resource`) to instantiate the Google GenAI client object. Rather than rebuilding the client thread and setup configuration on every script run (which Streamlit executes on every click or input change), connection pools are maintained globally, eliminating initialization handshaking overhead.
+
+#### 6. Live Hand Scanner with Auto-Capture
+The Live Scanner tab runs **MediaPipe Hand Landmarker** entirely client-side via a `<script type="module">` import from CDN (`@mediapipe/tasks-vision@0.10.3`). The WASM inference runs on GPU in the browser. When an open palm (≥3 fingers extended) is detected steadily for ~20 frames, a frame is auto-captured from the webcam, displayed below the live feed, and sent back to Streamlit via `postMessage`. A green glow bounding box is drawn around each detected hand for visual feedback.
+
+#### 7. AI-Free Hand Cropping Pipeline
+Before sending to Gemini, the image is preprocessed entirely with **PIL + numpy** (zero native deps). The pipeline: YCrCb skin segmentation → flood-fill from image center → bounding-box crop → blurred mask compositing onto dark background. This avoids OpenCV/MediaPipe Python dependency issues on Streamlit Cloud.
+
+#### 8. Two-Phase Image Upload
+Images are delivered to Gemini via a fallback chain: **GenAI File API** (`client.files.upload` with JPEG) first, then **`Part.from_bytes`** if the File API is unavailable. This ensures compatibility across different API key scopes and regions.
+
+#### 9. Scanning Animation Overlay
+After cropping, a `components.html`-embedded canvas animates a glowing purple scanner line that sweeps top-to-bottom over the palm image, complete with mount labels and particle effects—creating the illusion of an active palm scan before results appear.
 
 #### 6. Structured Logging & Observability
 The application uses Python's standard `logging` library. All major events—including GenAI client construction, image upload metrics, reading category triggers, follow-up submissions, and exceptions—are logged to standard output, making the app highly observable in production environments.
