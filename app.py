@@ -908,12 +908,33 @@ def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str,
 # Hand Crop — MediaPipe + OpenCV
 # ─────────────────────────────────────────────
 
+def _center_crop_fallback(image: Image.Image) -> Image.Image:
+    """Pure-PIL center crop onto dark background.  No OpenCV required."""
+    w, h = image.size
+    if w < 64 or h < 64:
+        return image
+    side = min(w, h)
+    crop_size = int(side * 0.72)
+    x1 = (w - crop_size) // 2
+    y1 = (h - crop_size) // 2
+    x2 = x1 + crop_size
+    y2 = y1 + crop_size
+    fallback = image.crop((x1, y1, x2, y2))
+    # Composite onto dark background for consistent theme blending
+    bg = Image.new("RGB", fallback.size, (10, 10, 26))
+    return Image.blend(fallback, bg, 0.15)
+
+
 def crop_hand_image(image: Image.Image) -> Image.Image:
     """Detect hand using MediaPipe, crop tightly, and composite onto
     dark theme background. Falls back to center-crop or original."""
-    import cv2
-    import numpy as np
-    import mediapipe as mp
+    try:
+        import cv2
+        import numpy as np
+        import mediapipe as mp
+    except (ImportError, OSError) as e:
+        logger.warning("OpenCV/MediaPipe unavailable (%s) — skipping hand crop", e)
+        return _center_crop_fallback(image)
 
     if image.mode != "RGB":
         img = image.convert("RGB")
@@ -967,25 +988,7 @@ def crop_hand_image(image: Image.Image) -> Image.Image:
         return Image.fromarray(cropped)
 
     # ── Phase 3: fallback center-crop (hand is usually centred in frame) ─
-    logger.info("Hand not detected — applying centred crop fallback")
-    side = min(w, h)
-    crop_size = int(side * 0.72)
-    x1 = (w - crop_size) // 2
-    y1 = (h - crop_size) // 2
-    x2 = x1 + crop_size
-    y2 = y1 + crop_size
-    fallback = img_array[y1:y2, x1:x2]
-
-    # Composite onto dark background so it blends with the app theme
-    dark_bg = np.full_like(fallback, (10, 10, 26), dtype=np.uint8)
-    # Soft vignette fade at edges
-    mask_fb = np.ones((crop_size, crop_size), dtype=np.float32)
-    edge = int(crop_size * 0.05)
-    mask_fb = cv2.GaussianBlur(mask_fb, (edge * 2 + 1, edge * 2 + 1), edge // 2)
-    mask_fb = np.clip(mask_fb * 1.5, 0, 1)
-    mask_3ch_fb = np.stack([mask_fb, mask_fb, mask_fb], axis=-1)
-    blended_fb = (fallback * mask_3ch_fb + dark_bg * (1 - mask_3ch_fb)).astype(np.uint8)
-    return Image.fromarray(blended_fb)
+    return _center_crop_fallback(image)
 
 
 # ─────────────────────────────────────────────
