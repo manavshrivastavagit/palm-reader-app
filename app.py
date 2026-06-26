@@ -1,5 +1,5 @@
 """
-🔮 PalmVerse — AI-Powered Palm Reading POC
+🔮 Hasthrekha — AI-Powered Multilingual Palm Reading
 Streamlit app that uses Gemini's multimodal vision to analyze palm images.
 """
 
@@ -10,7 +10,15 @@ from PIL import Image
 import io
 import os
 import json
+import logging
 from dotenv import load_dotenv
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("hasthrekha")
 
 load_dotenv()
 
@@ -181,6 +189,7 @@ Vedic, Western, and Chinese palmistry traditions. You are warm, insightful, and 
 gentle confidence — like a wise mentor who has studied thousands of palms.
 
 CRITICAL RULES:
+- IMAGE VALIDATION GUARDRAIL: Before providing any reading, verify if the uploaded image contains a human hand or open palm. If the image is NOT a human hand or palm (e.g., it is a random object, animal, document, landscape, or extremely blurry/unclear image), you MUST refuse to perform the analysis. State politely, in the requested language, that the image does not appear to show a clear human palm, and request the user to upload a well-lit photo of their open palm. Do NOT provide any reading in this case.
 - You MUST analyze the actual image provided. Identify specific features visible in THIS palm.
 - Never give generic readings. Reference specific lines, curves, depths, and markings you observe.
 - Use language like "I can see that your [line] is [description]..." to show you're reading THEIR palm.
@@ -207,6 +216,11 @@ and specificity as the initial reading. Reference specific features from their p
 
 If they ask about something not visible in the palm image, honestly say you cannot determine 
 that from what's visible, and explain why.
+
+DOMAIN LOCK & CONVERSATIONAL GUARDRAIL:
+- You are strictly a palmistry and life guidance advisor.
+- You MUST refuse to answer questions that are completely unrelated to palmistry, the user's uploaded hand image, or self-reflection based on their palm reading (e.g., asking for programming code, general knowledge questions, math problems, translations of unrelated text, or general chat).
+- If the user asks an unrelated question, politely refuse to answer in the requested language and redirect them to ask questions related to their palmistry reading or hand guidance.
 
 Stay in character — warm, insightful, and grounded in palmistry traditions.
 Always format responses in clean markdown.
@@ -447,163 +461,229 @@ Provide a rich personality profile — strengths, challenges, communication styl
 
 CUSTOM_CSS = """
 <style>
-    /* Global text color */
-    .stApp, .stApp p, .stApp span, .stApp li, .stApp label, .stApp div {
-        color: #f0f0f5 !important;
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght=300;400;500;600;700;800&family=Playfair+Display:ital,wght=0,400..900;1,400..900&display=swap');
+
+    /* Global typography */
+    html, body, [class*="css"], .stApp {
+        font-family: 'Outfit', -apple-system, sans-serif !important;
     }
 
-    /* Override for input boxes, selectboxes, dropdown options, and browse file buttons to be dark */
-    div[data-baseweb="select"] *, 
-    div[data-baseweb="popover"] *,
-    div[role="listbox"] *,
-    [data-testid="stFileUploader"] button,
-    [data-testid="stFileUploader"] button * {
-        color: #121214 !important;
+    /* Ensure clear text readability on dark background */
+    .stApp p, .stApp span, .stApp li, .stApp label, .stApp h1, .stApp h2, .stApp h3 {
+        color: #f0f0f5;
     }
 
-    /* Main background */
+    /* Main background with cosmic nebula effect */
     .stApp {
-        background: linear-gradient(135deg, #0a0a1a 0%, #1a0a2e 30%, #0d1b2a 70%, #0a0a1a 100%);
+        background: radial-gradient(circle at 50% 10%, #1c0a35 0%, #0a0a1a 70%);
+        background-attachment: fixed;
     }
 
-    /* Header styling */
+    /* Custom Scrollbar for a premium feel */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+        background: #0a0a1a;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #4c1d95;
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: #6d28d9;
+    }
+
+    /* Header styling with pulsing glowing text */
     .main-header {
         text-align: center;
-        padding: 1.5rem 0 1rem;
+        padding: 2.5rem 0 1.5rem;
     }
     .main-header h1 {
-        background: linear-gradient(135deg, #f7d794 0%, #e8a87c 30%, #d4a5ff 60%, #a29bfe 100%);
+        font-family: 'Playfair Display', Georgia, serif !important;
+        background: linear-gradient(135deg, #ffe082 0%, #ffb300 40%, #e040fb 70%, #00e5ff 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        font-size: 3rem;
+        font-size: 3.8rem;
         font-weight: 800;
         letter-spacing: -1px;
-        margin-bottom: 0.2rem;
+        margin-bottom: 0.4rem;
+        filter: drop-shadow(0 2px 8px rgba(255, 224, 130, 0.15));
+        animation: titleGlow 4s ease-in-out infinite alternate;
+    }
+    @keyframes titleGlow {
+        from {
+            filter: drop-shadow(0 2px 8px rgba(255, 224, 130, 0.15));
+        }
+        to {
+            filter: drop-shadow(0 4px 20px rgba(224, 64, 251, 0.35));
+        }
     }
     .main-header p {
-        color: #8b8ba3;
-        font-size: 1.1rem;
+        color: #a78bfa;
+        font-size: 1.15rem;
         font-style: italic;
+        font-weight: 300;
+        letter-spacing: 0.5px;
     }
 
-    /* Card containers */
+    /* Premium Glassmorphism Cards */
     .glass-card {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.025);
+        border: 1px solid rgba(255, 255, 255, 0.05);
         border-radius: 16px;
-        padding: 1.5rem;
+        padding: 1.8rem;
         margin: 1rem 0;
-        backdrop-filter: blur(10px);
+        backdrop-filter: blur(16px) saturate(180%);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+        transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .glass-card:hover {
+        transform: translateY(-4px);
+        background: rgba(255, 255, 255, 0.04);
+        border-color: rgba(167, 139, 250, 0.25);
+        box-shadow: 0 12px 40px 0 rgba(124, 58, 237, 0.18);
+    }
+    .glass-card h3 {
+        font-family: 'Playfair Display', Georgia, serif !important;
+        font-size: 1.4rem;
+        color: #ffb300;
+        margin-bottom: 0.6rem;
     }
 
-    /* Upload area */
+    /* File upload design */
     .upload-section {
-        background: rgba(167, 139, 250, 0.05);
-        border: 2px dashed rgba(167, 139, 250, 0.25);
+        background: rgba(124, 58, 237, 0.03);
+        border: 2px dashed rgba(167, 139, 250, 0.2);
         border-radius: 20px;
-        padding: 2rem;
+        padding: 2.5rem 1.5rem;
         text-align: center;
         transition: all 0.3s ease;
+        box-shadow: inset 0 0 20px rgba(124, 58, 237, 0.05);
     }
     .upload-section:hover {
         border-color: rgba(167, 139, 250, 0.5);
-        background: rgba(167, 139, 250, 0.08);
+        background: rgba(124, 58, 237, 0.06);
+        box-shadow: inset 0 0 25px rgba(124, 58, 237, 0.08);
     }
 
     /* Reading result container */
     .reading-container {
-        background: rgba(255, 255, 255, 0.02);
-        border: 1px solid rgba(212, 165, 255, 0.15);
-        border-radius: 20px;
-        padding: 2rem;
-        margin-top: 1.5rem;
-        line-height: 1.8;
+        background: rgba(10, 10, 26, 0.4);
+        border: 1px solid rgba(167, 139, 250, 0.15);
+        border-radius: 24px;
+        padding: 2.5rem;
+        margin-top: 2rem;
+        line-height: 1.85;
+        backdrop-filter: blur(16px);
+        box-shadow: 0 15px 45px rgba(0, 0, 0, 0.4), inset 0 0 15px rgba(167, 139, 250, 0.05);
     }
     .reading-container h2 {
-        color: #d4a5ff;
-        margin-top: 1.5rem;
+        font-family: 'Playfair Display', Georgia, serif !important;
+        color: #c4b5fd;
+        font-size: 2rem;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
         padding-bottom: 0.5rem;
-        border-bottom: 1px solid rgba(212, 165, 255, 0.15);
+        border-bottom: 1px solid rgba(167, 139, 250, 0.15);
     }
     .reading-container h3 {
-        color: #f7d794;
+        font-family: 'Playfair Display', Georgia, serif !important;
+        color: #ffb300;
+        font-size: 1.45rem;
+        margin-top: 1.5rem;
     }
 
-    /* Sidebar */
+    /* Sidebar customize */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0d0d2b 0%, #1a0a2e 100%);
-        border-right: 1px solid rgba(255, 255, 255, 0.06);
+        background: linear-gradient(180deg, #090915 0%, #150926 100%);
+        border-right: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    section[data-testid="stSidebar"] h2 {
+        font-family: 'Playfair Display', Georgia, serif !important;
+        color: #ffd54f !important;
+        font-size: 1.5rem;
     }
     section[data-testid="stSidebar"] .stSelectbox label,
     section[data-testid="stSidebar"] .stRadio label {
         color: #c4b5fd !important;
+        font-weight: 500;
     }
 
-    /* Buttons */
+    /* Interactive Buttons */
     .stButton > button {
-        background: linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #7c3aed 100%);
+        background: linear-gradient(135deg, #6d28d9 0%, #a855f7 50%, #4c1d95 100%);
+        background-size: 200% auto;
         color: white;
         border: none;
         border-radius: 12px;
-        padding: 0.7rem 2rem;
+        padding: 0.8rem 2rem;
         font-weight: 600;
         font-size: 1rem;
-        transition: all 0.3s ease;
+        transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
         width: 100%;
+        box-shadow: 0 4px 15px rgba(109, 40, 217, 0.2);
     }
     .stButton > button:hover {
         transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(124, 58, 237, 0.4);
+        background-position: right center;
+        box-shadow: 0 8px 25px rgba(168, 85, 247, 0.4);
     }
 
-    /* Chat input */
+    /* Modern Chat Bubble styling */
+    .stChatMessage {
+        background: rgba(255, 255, 255, 0.02) !important;
+        border: 1px solid rgba(255, 255, 255, 0.04) !important;
+        border-radius: 16px !important;
+        padding: 1rem !important;
+        margin-bottom: 0.8rem !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    }
+    /* Chat input focus */
     .stChatInput > div {
-        border-color: rgba(167, 139, 250, 0.3) !important;
-        border-radius: 12px !important;
+        border-color: rgba(167, 139, 250, 0.2) !important;
+        border-radius: 14px !important;
+        background-color: rgba(15, 10, 25, 0.6) !important;
     }
 
-    /* Spinner */
+    /* Spinner color */
     .stSpinner > div {
         border-color: #a855f7 !important;
     }
 
-    /* Divider */
+    /* Celestial Divider */
     .mystic-divider {
         text-align: center;
-        margin: 1.5rem 0;
-        color: #6c6c8a;
-        font-size: 1.2rem;
-        letter-spacing: 8px;
+        margin: 2rem 0;
+        color: #ffb300;
+        font-size: 1.3rem;
+        letter-spacing: 12px;
+        opacity: 0.85;
     }
 
-    /* Feature pills in sidebar */
-    .feature-pill {
-        display: inline-block;
-        background: rgba(167, 139, 250, 0.1);
-        border: 1px solid rgba(167, 139, 250, 0.2);
-        border-radius: 20px;
-        padding: 4px 12px;
-        margin: 3px;
-        font-size: 0.75rem;
-        color: #c4b5fd;
-    }
-
-    /* Image display */
+    /* Image display styling */
     .palm-image-container {
         border-radius: 16px;
         overflow: hidden;
-        border: 2px solid rgba(212, 165, 255, 0.2);
+        border: 2px solid rgba(167, 139, 250, 0.15);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
     }
 
-    /* Hide streamlit branding */
+    /* Hide default elements */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
     /* Expander styling */
     .streamlit-expanderHeader {
-        color: #d4a5ff !important;
+        color: #c4b5fd !important;
         font-weight: 600;
+        background: transparent !important;
+    }
+    .streamlit-expanderContent {
+        background: rgba(255, 255, 255, 0.01) !important;
+        border-radius: 0 0 12px 12px;
     }
 </style>
 """
@@ -613,56 +693,104 @@ CUSTOM_CSS = """
 # ─────────────────────────────────────────────
 
 
+@st.cache_resource
+def _create_cached_client(api_key: str) -> genai.Client:
+    """Create a cached GenAI client instance."""
+    logger.info("Initializing a new cached GenAI client instance.")
+    return genai.Client(api_key=api_key)
+
+
 def get_gemini_client() -> Optional[genai.Client]:
     """Initialize and return the Gemini client."""
     api_key = os.getenv("GEMINI_API_KEY", "") or st.session_state.get("api_key", "")
     if not api_key:
         return None
-    return genai.Client(api_key=api_key)
+    return _create_cached_client(api_key.strip())
 
 
-def analyze_palm(client: genai.Client, image: Image.Image, category: str, tradition: str, lang: str) -> str:
-    """Send palm image to Gemini for analysis."""
+def analyze_palm_stream(client: genai.Client, image: Image.Image, category: str, tradition: str, lang: str):
+    """Send palm image to Gemini for streaming analysis."""
+    logger.info(f"Starting palm analysis (category={category}, tradition={tradition}, lang={lang})")
     prompt = build_reading_prompt(category, tradition, lang)
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[prompt, image],
-        config=genai.types.GenerateContentConfig(
-            system_instruction=get_system_prompt(lang),
-            temperature=0.8,
-            max_output_tokens=4096,
-        ),
-    )
-    return response.text
+    try:
+        response_stream = client.models.generate_content_stream(
+            model="gemini-2.5-flash",
+            contents=[prompt, image],
+            config=genai.types.GenerateContentConfig(
+                system_instruction=get_system_prompt(lang),
+                temperature=0.8,
+                max_output_tokens=4096,
+            ),
+        )
+        for chunk in response_stream:
+            if chunk.text:
+                yield chunk.text
+    except Exception as e:
+        logger.error(f"Error during palm analysis: {str(e)}", exc_info=True)
+        if lang == "hi":
+            yield f"\n\n❌ **त्रुटि**: विश्लेषण करने में विफल। ({str(e)})"
+        else:
+            yield f"\n\n❌ **Error**: Failed to analyze palm. ({str(e)})"
 
 
-def chat_followup(client: genai.Client, image: Image.Image, reading: str, history: list, question: str, lang: str) -> str:
-    """Handle follow-up questions about the reading."""
-    context = f"""Here is the initial palm reading that was provided:
+def chat_followup_stream(client: genai.Client, image: Image.Image, reading: str, history: list, question: str, lang: str):
+    """Handle follow-up questions about the reading using streaming and native chat history format."""
+    logger.info(f"Starting chat follow-up (history_len={len(history)}, lang={lang})")
+    contents = []
+    
+    # 1. Add initial reading context as the first user turn
+    contents.append(genai.types.Content(
+        role="user",
+        parts=[
+            genai.types.Part.from_text(text=f"Initial Palm Reading Context:\n\n{reading}"),
+            image
+        ]
+    ))
+    
+    # 2. Add validation acknowledgement by the model to lock the turn
+    contents.append(genai.types.Content(
+        role="model",
+        parts=[
+            genai.types.Part.from_text(text="Understood. I have analyzed the palm image and will reference the reading context for your follow-up questions.")
+        ]
+    ))
+    
+    # 3. Add the rest of the chat history turns, filtering out empty contents
+    for msg in history[:-1]:
+        if msg.get("content") and msg["content"].strip():
+            role = "user" if msg["role"] == "user" else "model"
+            contents.append(genai.types.Content(
+                role=role,
+                parts=[genai.types.Part.from_text(text=msg["content"].strip())]
+            ))
+        
+    # 4. Add the current user question
+    if question and question.strip():
+        contents.append(genai.types.Content(
+            role="user",
+            parts=[genai.types.Part.from_text(text=question.strip())]
+        ))
 
----
-{reading}
----
-
-The user is now asking a follow-up question. Answer based on the palm image 
-and the reading context above."""
-
-    messages = [context, image]
-    for msg in history:
-        messages.append(f"{msg['role'].upper()}: {msg['content']}")
-    messages.append(f"USER: {question}")
-
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=messages,
-        config=genai.types.GenerateContentConfig(
-            system_instruction=get_followup_system_prompt(lang),
-            temperature=0.8,
-            max_output_tokens=2048,
-        ),
-    )
-    return response.text
+    try:
+        response_stream = client.models.generate_content_stream(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=get_followup_system_prompt(lang),
+                temperature=0.8,
+                max_output_tokens=2048,
+            ),
+        )
+        for chunk in response_stream:
+            if chunk.text:
+                yield chunk.text
+    except Exception as e:
+        logger.error(f"Error during chat follow-up: {str(e)}", exc_info=True)
+        if lang == "hi":
+            yield f"\n\n❌ **त्रुटि**: प्रतिक्रिया उत्पन्न करने में विफल। ({str(e)})"
+        else:
+            yield f"\n\n❌ **Error**: Failed to generate response. ({str(e)})"
 
 
 # ─────────────────────────────────────────────
@@ -676,9 +804,10 @@ def init_session_state():
         "palm_image": None,
         "chat_history": [],
         "reading_done": False,
-        "app_lang": "hi",  # Hindi by default
+        "app_lang": "en",  # English by default
         "selected_category": None,
         "selected_tradition": None,
+        "last_uploaded_file_id": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -708,9 +837,9 @@ def render_sidebar(t):
     with st.sidebar:
         st.markdown(f"## {t['settings']}")
 
-        # Language Selector (Hindi default)
-        lang_options = {"Hindi (हिन्दी)": "hi", "English (English)": "en"}
-        current_lang_idx = 0 if st.session_state.app_lang == "hi" else 1
+        # Language Selector (English default)
+        lang_options = {"English (English)": "en", "Hindi (हिन्दी)": "hi"}
+        current_lang_idx = 0 if st.session_state.app_lang == "en" else 1
         selected_lang_name = st.selectbox(
             t["lang_label"],
             options=list(lang_options.keys()),
@@ -723,6 +852,9 @@ def render_sidebar(t):
             st.session_state.app_lang = new_lang
             st.session_state.selected_category = None
             st.session_state.selected_tradition = None
+            st.session_state.reading_result = None
+            st.session_state.reading_done = False
+            st.session_state.chat_history = []
             st.rerun()
 
         # API Key input (if not in env)
@@ -814,7 +946,7 @@ def render_palm_display(image: Image.Image, t):
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown('<div class="palm-image-container">', unsafe_allow_html=True)
-        st.image(image, caption=t["your_palm"], use_container_width=True)
+        st.image(image, caption=t["your_palm"], width="stretch")
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -845,9 +977,8 @@ def render_chat_section(client: genai.Client, image: Image.Image, reading: str, 
 
         # Get AI response
         with st.chat_message("assistant", avatar="🔮"):
-            with st.spinner(t["chat_spinner"]):
-                response = chat_followup(client, image, reading, st.session_state.chat_history, question, st.session_state.app_lang)
-                st.markdown(response)
+            stream = chat_followup_stream(client, image, reading, st.session_state.chat_history, question, st.session_state.app_lang)
+            response = st.write_stream(stream)
         st.session_state.chat_history.append({"role": "assistant", "content": response})
         st.rerun()
 
@@ -891,12 +1022,32 @@ def main():
     image_file = render_upload_section(t)
 
     if image_file is not None:
-        # Load image
-        image = Image.open(image_file)
-        st.session_state.palm_image = image
+        # Detect if a different file is uploaded and reset the reading state
+        file_identifier = getattr(image_file, "name", "camera") + f"_{getattr(image_file, 'size', 0)}"
+        if st.session_state.get("last_uploaded_file_id") != file_identifier:
+            st.session_state.last_uploaded_file_id = file_identifier
+            st.session_state.reading_result = None
+            st.session_state.reading_done = False
+            st.session_state.chat_history = []
 
-        # Display palm
-        render_palm_display(image, t)
+        try:
+            # Load image
+            image = Image.open(image_file)
+            
+            # Apply EXIF transpose to ensure correct orientation (prevent sideways images)
+            from PIL import ImageOps
+            image = ImageOps.exif_transpose(image)
+            
+            st.session_state.palm_image = image
+
+            # Display palm
+            render_palm_display(image, t)
+        except Exception as e:
+            if st.session_state.app_lang == "hi":
+                st.error(f"❌ छवि लोड करने में त्रुटि: {str(e)}। कृपया सुनिश्चित करें कि यह एक मान्य छवि फ़ाइल (PNG, JPG, WEBP) है।")
+            else:
+                st.error(f"❌ Error loading image: {str(e)}. Please make sure it is a valid image file (PNG, JPG, WEBP).")
+            return
 
         # Read Palm button
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -917,16 +1068,30 @@ def main():
             tradition = tradition_map[tradition_key]
 
             button_label = t["read_button"].format(category=category_key)
-            if st.button(button_label, use_container_width=True):
-                with st.spinner(t["spinner_reading"]):
-                    try:
-                        reading = analyze_palm(client, image, category, tradition, st.session_state.app_lang)
-                        st.session_state.reading_result = reading
-                        st.session_state.reading_done = True
-                        st.session_state.chat_history = []  # Reset chat for new reading
-                    except Exception as e:
-                        st.error(t["error_reading"].format(error=str(e)))
-                        return
+            if st.button(button_label, width="stretch"):
+                try:
+                    # Clear previous state
+                    st.session_state.reading_result = None
+                    st.session_state.reading_done = False
+                    
+                    # Show a subtle notice while streaming starts
+                    status_placeholder = st.empty()
+                    status_placeholder.markdown(f"*{t['spinner_reading']}*")
+                    
+                    # Call streaming function
+                    stream = analyze_palm_stream(client, image, category, tradition, st.session_state.app_lang)
+                    
+                    # Clear spinner notice and stream the text
+                    status_placeholder.empty()
+                    reading = st.write_stream(stream)
+                    
+                    st.session_state.reading_result = reading
+                    st.session_state.reading_done = True
+                    st.session_state.chat_history = []  # Reset chat for new reading
+                    st.rerun()
+                except Exception as e:
+                    st.error(t["error_reading"].format(error=str(e)))
+                    return
 
         # Display reading if available
         if st.session_state.reading_done and st.session_state.reading_result:
@@ -935,7 +1100,7 @@ def main():
             # Action buttons row
             col_a, col_b, col_c = st.columns(3)
             with col_a:
-                if st.button(t["new_reading"], use_container_width=True):
+                if st.button(t["new_reading"], width="stretch"):
                     st.session_state.reading_result = None
                     st.session_state.reading_done = False
                     st.session_state.chat_history = []
@@ -946,17 +1111,22 @@ def main():
                     data=st.session_state.reading_result,
                     file_name="hasthrekha_reading.md",
                     mime="text/markdown",
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_c:
-                if st.button(t["copy_reading"], use_container_width=True):
+                if st.button(t["copy_reading"], width="stretch"):
                     st.toast(t["copy_toast"], icon="✅")
 
             # Follow-up chat
             render_chat_section(client, image, st.session_state.reading_result, t)
 
     else:
-        # No image — show features
+        # No image — show features and reset reading state
+        st.session_state.last_uploaded_file_id = None
+        st.session_state.reading_result = None
+        st.session_state.reading_done = False
+        st.session_state.chat_history = []
+
         st.markdown('<div class="mystic-divider">✦ ✦ ✦</div>', unsafe_allow_html=True)
 
         col1, col2, col3 = st.columns(3)
